@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05344D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Bible Present">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css?v=1.2">
+<title>Bible Present Mobile</title>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="title">BIBLE PRESENT</span>
+    <span class="sub" id="brand-sub">MOBILE</span>
+  </div>
+  <div class="conn conn-only" id="conn">
+    <span class="dot"></span><span id="conn-name">Laptop</span>
+    <button id="back-btn" class="ghost small hidden">Back to my lists</button>
+  </div>
+  <nav class="mode-switch" aria-label="View">
+    <button data-mode="browse" class="active">Browse</button>
+    <button data-mode="list">List <span id="mode-count" class="count"></span></button>
+  </nav>
+</header>
+
+<main class="layout" id="layout" data-mode="browse">
+  <!-- Left: find verses and sermon paragraphs -->
+  <section class="pane browse">
+    <nav class="tabs">
+      <button data-tab="bible" class="active">Bible</button>
+      <button data-tab="sermons">Sermons</button>
+    </nav>
+
+    <div id="bible-pane" class="tabpane">
+      <div class="row">
+        <input id="ref-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+               enterkeyhint="go" placeholder="Go to…  joh 3:16-18 · ps 23 · 56-0401M 12">
+        <select id="bible-select" aria-label="Bible"></select>
+      </div>
+      <div class="narrow-pickers">
+        <select id="book-select" aria-label="Book"></select>
+        <select id="chapter-select" aria-label="Chapter"></select>
+      </div>
+      <div class="cols bible-cols">
+        <div class="col books">
+          <div class="col-title">BOOK</div>
+          <ul id="book-list" class="scroll"></ul>
+        </div>
+        <div class="col chapters">
+          <div class="col-title">CHAPTER</div>
+          <div id="chapter-grid" class="scroll grid"></div>
+        </div>
+        <div class="col verses">
+          <div class="col-title" id="verse-title">VERSE</div>
+          <ol id="verse-list" class="scroll items"></ol>
+        </div>
+      </div>
+    </div>
+
+    <div id="sermons-pane" class="tabpane hidden">
+      <input id="sermon-find" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+             placeholder="Find sermon: code, title or place…  e.g. 56-0401M · Conqueror">
+      <form id="sermon-search-form" class="row">
+        <input id="sermon-search" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search"
+               placeholder="Search the text of all sermons…  e.g. do you now believe">
+        <button type="submit" class="primary small">Search</button>
+      </form>
+      <div class="cols sermon-cols">
+        <div class="col sermon-list-col">
+          <div class="col-title" id="sermon-list-title">SERMONS</div>
+          <ul id="sermon-list" class="scroll"></ul>
+        </div>
+        <div class="col para-col">
+          <div class="col-title"><span id="para-title">PARAGRAPHS</span>
+            <span class="lang-toggle" id="para-lang"></span></div>
+          <ol id="para-list" class="scroll items"></ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="addbar hidden" id="addbar">
+      <span id="addbar-label"></span>
+      <button id="addbar-clear" class="ghost">Clear</button>
+      <button id="addbar-add" class="primary">＋ Add to list</button>
+      <button id="addbar-live" class="live conn-only">● Go live</button>
+    </div>
+  </section>
+
+  <!-- Right: the list that is being prepared -->
+  <section class="pane list">
+    <!-- preparing (anywhere) -->
+    <div class="list-head prep-only">
+      <select id="list-select" aria-label="List"></select>
+      <button id="list-new" class="ghost small">New list</button>
+      <button id="list-delete" class="ghost small" title="Delete this list">Delete</button>
+    </div>
+    <input id="list-name" class="list-name prep-only" type="text" placeholder="Name of this list (e.g. Sunday 19 October)">
+    <!-- connected to the laptop -->
+    <div class="col-title conn-only"><span>SERVICE LIST · LAPTOP</span><span id="remote-count"></span></div>
+
+    <ul id="list-items" class="scroll"></ul>
+    <div class="list-empty" id="list-empty">
+      Select verses or sermon paragraphs on the left and tap <b>Add to list</b>.
+    </div>
+
+    <div class="prep-only">
+      <button id="connect-btn" class="connect">Connect to laptop</button>
+      <div class="list-actions">
+        <button id="share-file" class="primary">Send as file</button>
+        <button id="share-text" class="ghost">Share as text</button>
+      </div>
+      <p class="hint">Without Wi-Fi to the laptop: send the file (AirDrop, mail…) and open it with Service list ⋯ → <b>Open list…</b></p>
+    </div>
+
+    <div class="console conn-only">
+      <div class="live-card" id="live-card">
+        <div class="live-head"><span class="badge" id="live-badge">NOT LIVE</span><span id="live-ref"></span></div>
+        <div class="live-text" id="live-text">Nothing on screen yet</div>
+      </div>
+      <div class="ctl-row">
+        <button id="ctl-prev" class="nav">◀ Previous</button>
+        <button id="ctl-next" class="nav">Next ▶</button>
+      </div>
+      <div class="ctl-row">
+        <button id="ctl-blank" class="blank">Blank</button>
+        <div class="seg" id="ctl-show"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
+<div id="toast" role="status"></div>
+<script src="app.js?v=1.2"></script>
+</body>
+</html>
