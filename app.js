@@ -217,6 +217,7 @@ function paintSelection() {
       li.classList.toggle("edge", !!on && (n === s.start || n === s.end));
     }
   }
+  if (conn.info) paintLive();  // connected: also the coral frame on what is live
   const bar = $("addbar");
   if (!s) { bar.classList.add("hidden"); return; }
   bar.classList.remove("hidden");
@@ -492,46 +493,72 @@ function renderList() {
   $("mode-count").textContent = list.items.length || "";
   renderLists();
 }
-/** Drag an item by its grip: it moves through the list under the finger; the list scrolls
-    along near its top and bottom edge. */
+/** Drag an item by its grip. The item lifts and follows the finger (it is only moved visually,
+    so iPadOS keeps tracking the finger); the other items glide out of the way; on release it
+    settles into its new place. Near the top/bottom edge the list scrolls along. */
+let dragging = false;
 function startDrag(e, li, grip, onDrop) {
+  if (dragging) return;
   e.preventDefault();
+  dragging = true;
   const ul = $("list-items");
-  const from = [...ul.children].indexOf(li);
-  try { grip.setPointerCapture(e.pointerId); } catch { /* not all pointers can be captured */ }
+  const items = [...ul.children];
+  const from = items.indexOf(li);
+  // positions inside the list (independent of scrolling and of the transforms we set)
+  const tops = items.map((x) => x.offsetTop);
+  const heights = items.map((x) => x.offsetHeight);
+  const step = from + 1 < items.length ? tops[from + 1] - tops[from] : heights[from] + 4;
+  const startY = e.clientY, startScroll = ul.scrollTop;
+  let lastY = startY, to = from, frame = 0;
+  ul.classList.add("sorting");
   li.classList.add("dragging");
-  let lastY = e.clientY, scroller = null;
-  const place = () => {
-    for (const sib of ul.children) {
-      if (sib === li) continue;
-      const r = sib.getBoundingClientRect();
-      if (lastY < r.top + r.height / 2) {
-        if (li.nextElementSibling !== sib) ul.insertBefore(li, sib);
-        return;
-      }
-    }
-    if (ul.lastElementChild !== li) ul.appendChild(li);
+
+  const offset = () => lastY - startY + (ul.scrollTop - startScroll);
+  const render = () => {
+    frame = 0;
+    const dy = offset();
+    li.style.transform = `translateY(${dy}px) scale(1.02)`;
+    const center = tops[from] + heights[from] / 2 + dy;
+    to = 0;
+    items.forEach((x, i) => { if (i !== from && tops[i] + heights[i] / 2 < center) to++; });
+    items.forEach((x, i) => {
+      if (i === from) return;
+      const shift = from < to && i > from && i <= to ? -step : from > to && i >= to && i < from ? step : 0;
+      x.style.transform = shift ? `translateY(${shift}px)` : "";
+    });
   };
-  const autoscroll = () => {
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(render); };
+  const scroller = setInterval(() => {
     const r = ul.getBoundingClientRect();
-    const step = lastY < r.top + 40 ? -10 : lastY > r.bottom - 40 ? 10 : 0;
-    if (step) { ul.scrollTop += step; place(); }
-  };
-  const move = (ev) => { lastY = ev.clientY; place(); };
-  const end = () => {
-    grip.removeEventListener("pointermove", move);
-    grip.removeEventListener("pointerup", end);
-    grip.removeEventListener("pointercancel", end);
+    const s = lastY < r.top + 50 ? -12 : lastY > r.bottom - 50 ? 12 : 0;
+    if (s) { ul.scrollTop += s; schedule(); }
+  }, 16);
+  const move = (ev) => { if (ev.pointerId === e.pointerId) { lastY = ev.clientY; schedule(); } };
+  const end = (ev) => {
+    if (ev && ev.pointerId !== undefined && ev.pointerId !== e.pointerId) return;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
     clearInterval(scroller);
-    li.classList.remove("dragging");
-    const to = [...ul.children].indexOf(li);
-    if (to !== from) onDrop(from, to);
-    renderList();
+    cancelAnimationFrame(frame);
+    render();
+    // settle: glide into the new slot, then rebuild the list in the new order
+    const target = to === from ? 0 : (tops[to] - tops[from]) + (to > from ? heights[to] - heights[from] : 0);
+    li.style.transition = "transform .18s ease";
+    li.style.transform = `translateY(${target}px)`;
+    setTimeout(() => {
+      for (const x of items) { x.style.transform = ""; x.style.transition = ""; }
+      li.classList.remove("dragging");
+      ul.classList.remove("sorting");
+      dragging = false;
+      if (to !== from) onDrop(from, to);
+      renderList();
+    }, 190);
   };
-  scroller = setInterval(autoscroll, 30);
-  grip.addEventListener("pointermove", move);
-  grip.addEventListener("pointerup", end);
-  grip.addEventListener("pointercancel", end);
+  window.addEventListener("pointermove", move, { passive: true });
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  schedule();
 }
 function showItem(it) {
   setMode("browse");
@@ -646,6 +673,12 @@ async function detectLaptop() {
 }
 
 async function initConnected(info) {
+  // Reached by name (biblepresent.local)? Continue on the laptop's IP address: an iPad looks the
+  // name up again every few minutes, which can hold commands up for seconds.
+  if (location.hostname.endsWith(".local") && info.ips && info.ips.length) {
+    location.replace(`http://${info.ips[0]}:${info.port || location.port}/${location.hash}`);
+    return new Promise(() => {});  // the page is being replaced
+  }
   conn.info = info;
   document.body.classList.add("connected");
   API = "mh/";
@@ -670,7 +703,9 @@ async function initConnected(info) {
 function askCode(prefill, error) {
   showDialog(`<h2>Connect to ${esc(conn.info.name)}</h2>
     <p>Enter the 4-digit code shown on the laptop (Bible Present → <b>iPad</b>).</p>
-    <input id="pin" class="pin" inputmode="numeric" maxlength="4" autocomplete="one-time-code" value="${esc(prefill)}">
+    <input id="pin" class="pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4"
+           autocomplete="one-time-code" value="${esc(prefill)}">
+    <p>You only need to do this once for this laptop.</p>
     <div class="error">${esc(error || "")}</div>
     <div class="buttons"><button id="pin-ok" class="primary">Connect</button></div>`, (d) => {
     const input = d.querySelector("#pin");
@@ -691,38 +726,77 @@ function askCode(prefill, error) {
   });
 }
 
-function startConnected() {
+/** Live updates from the laptop. iPadOS can silently stop such a stream (screen dimmed, app in the
+    background, Wi-Fi power saving), so the laptop sends a heartbeat every few seconds and a
+    watchdog reconnects as soon as it stays away. */
+function applyState(s) {
+  if (!s || (conn.remote && s.version < conn.remote.version)) return;  // never go back to older news
+  const first = !conn.remote;
+  conn.remote = s;
+  conn.lastNews = Date.now();
+  $("conn").classList.remove("lost");
+  renderRemote();
+  if (first && conn.handoff) offerHandoff();
+}
+function openStream() {
   if (conn.events) conn.events.close();
   conn.events = new EventSource(`api/events?token=${encodeURIComponent(conn.token)}`);
-  conn.events.onmessage = (e) => {
-    const first = !conn.remote;
-    conn.remote = JSON.parse(e.data);
-    $("conn").classList.remove("lost");
-    renderRemote();
-    if (first && conn.handoff) offerHandoff();
-  };
-  conn.events.onerror = async () => {
-    $("conn").classList.add("lost");
-    try {
-      const res = await fetch("api/state", { headers: { "X-BP-Token": conn.token } });
-      if (res.status === 401) {  // the laptop made a new code
-        conn.events.close();
-        store.set("token", null);
-        askCode("", "The code on the laptop was changed. Enter the new code.");
-      }
-    } catch { /* laptop not reachable for a moment: the stream reconnects by itself */ }
-  };
+  conn.events.onmessage = (e) => applyState(JSON.parse(e.data));
+  conn.events.addEventListener("ping", () => { conn.lastNews = Date.now(); $("conn").classList.remove("lost"); });
+  conn.events.onerror = () => { $("conn").classList.add("lost"); refreshState(); };
+}
+async function refreshState() {
+  try {
+    const ctl = new AbortController();
+    setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch("api/state", { headers: { "X-BP-Token": conn.token }, cache: "no-store", signal: ctl.signal });
+    if (res.status === 401) {  // the laptop made a new code
+      if (conn.events) conn.events.close();
+      store.set("token", null);
+      askCode("", "The code on the laptop was changed. Enter the new code.");
+      return;
+    }
+    if (res.ok) applyState(await res.json());
+  } catch { $("conn").classList.add("lost"); }
+}
+function startConnected() {
+  conn.lastNews = Date.now();
+  openStream();
+  refreshState();
+  clearInterval(conn.watchdog);
+  conn.watchdog = setInterval(() => {  // no news for 9 s: the stream is stale, reconnect
+    if (document.visibilityState === "visible" && Date.now() - conn.lastNews > 9000) {
+      $("conn").classList.add("lost");
+      openStream();
+      refreshState();
+      conn.lastNews = Date.now() - 5000;  // try again in a few seconds if this does not help
+    }
+  }, 3000);
+  if (!conn.visibilityHooked) {
+    conn.visibilityHooked = true;
+    document.addEventListener("visibilitychange", () => {  // back in the app: catch up at once
+      if (document.visibilityState === "visible" && conn.token) { openStream(); refreshState(); }
+    });
+  }
   loadSermonIndex();
 }
 
+/** A command for the laptop. Never waits long (a slow request must not hold up the next one),
+    and checks the result straight away instead of relying on the live stream alone. */
 async function cmd(action, extra = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 5000);
   try {
-    const res = await fetch("api/cmd", { method: "POST",
+    const res = await fetch("api/cmd", { method: "POST", signal: ctl.signal, cache: "no-store",
       headers: { "Content-Type": "application/json", "X-BP-Token": conn.token || "" },
       body: JSON.stringify({ action, ...extra }) });
     if (res.status === 401) askCode("", "Enter the code shown on the laptop.");
     else if (!res.ok) toast("The laptop did not accept that.");
-  } catch { toast("The laptop does not answer. Same Wi-Fi?"); }
+    else setTimeout(refreshState, 150);
+  } catch {
+    toast("The laptop does not answer. Same Wi-Fi?");
+    openStream();
+  } finally { clearTimeout(timer); }
 }
 
 function offerHandoff() {
@@ -732,10 +806,10 @@ function offerHandoff() {
   showDialog(`<h2>Send your list to the laptop?</h2>
     <p>“${esc(h.name || "List")}” — ${h.items.length} item${h.items.length === 1 ? "" : "s"}.
        The laptop's service list now has ${conn.remote.service.length}.</p>
-    <div class="buttons">
+    <div class="buttons stacked">
       <button id="h-no" class="ghost">Not now</button>
       <button id="h-replace" class="ghost">Replace the laptop's list</button>
-      <button id="h-add" class="primary">Add to the end</button></div>`, (d) => {
+      <button id="h-add" class="primary">Add to the end of the laptop's list</button></div>`, (d) => {
     const send = (mode) => { cmd("list", { mode, name: h.name, service: h.items.map(toService) }); closeDialog(); toast("List sent to the laptop"); };
     d.querySelector("#h-add").onclick = () => send("append");
     d.querySelector("#h-replace").onclick = () => send("replace");
@@ -753,6 +827,14 @@ function backToLists() {
 function renderRemote() {
   const r = conn.remote, ul = $("list-items");
   if (!r) return;
+  paintLive();
+  // The iPad asked for this (item, Next, Previous): show it on the left too, once the laptop has moved
+  const f = conn.follow;
+  if (f && r.live.pos && (JSON.stringify(r.live.pos) !== f.before || Date.now() > f.until)) {
+    conn.follow = null;
+    followLive(r.live.pos);
+  }
+  if (dragging) return;  // the list is redrawn when the drag ends
   ul.innerHTML = "";
   r.service.forEach((it, i) => {
     const li = el("li");
@@ -767,7 +849,7 @@ function renderRemote() {
     const body = el("div", "body");
     body.append(el("div", "label", it.label), el("div", "snip", it.snippet || ""));
     body.title = "Tap to put this on the screen";
-    body.onclick = () => cmd("present_item", { id: it.id });
+    body.onclick = () => { followNext(); cmd("present_item", { id: it.id }); };
     const del = el("button", "del", "✕");
     del.title = "Remove from the service list";
     del.onclick = () => cmd("remove", { id: it.id });
@@ -797,6 +879,41 @@ function renderRemote() {
     b.onclick = () => cmd("show", { mode });
     seg.appendChild(b);
   }
+}
+
+/** Remember where the screen is now; the left side follows when it changes (or within 2 s). */
+function followNext() {
+  const pos = conn.remote && conn.remote.live.pos;
+  conn.follow = { before: JSON.stringify(pos || null), until: Date.now() + 2000 };
+}
+
+/** The coral frame on the verse / paragraph that is on the laptop's screen. */
+function paintLive() {
+  const r = conn.remote;
+  const pos = r && r.live.on_air ? r.live.pos : null;
+  for (const li of $("verse-list").children) {
+    const n = +li.dataset.n;
+    li.classList.toggle("live", !!(pos && pos.kind === "bible" && pos.b === state.book &&
+      pos.verses.some(([c, v]) => c === state.chapter && v === n)));
+  }
+  for (const li of $("para-list").children) {
+    li.classList.toggle("live", !!(pos && pos.kind === "sermon" && state.sermon &&
+      state.sermon.code === pos.code && +li.dataset.n === pos.num));
+  }
+}
+/** Show the live passage on the left (after tapping a list item, Next or Previous on the iPad). */
+async function followLive(pos) {
+  if (pos.kind === "bible") {
+    const [c, v] = pos.verses[0];
+    setTab("bible");
+    if (state.book !== pos.b || state.chapter !== c) openChapter(pos.b, c);
+    scrollToItem("verse-list", v);
+  } else {
+    setTab("sermons");
+    if (!state.sermon || state.sermon.code !== pos.code) await openSermon(pos.code);
+    scrollToItem("para-list", pos.num);
+  }
+  paintLive();
 }
 
 /* Preparing (GitHub version): open the laptop's page, taking the current list along. */
@@ -897,8 +1014,8 @@ async function init() {
   $("connect-btn").onclick = connectDialog;
   $("back-btn").onclick = backToLists;
   $("addbar-live").onclick = presentSelection;
-  $("ctl-next").onclick = () => cmd("next");
-  $("ctl-prev").onclick = () => cmd("prev");
+  $("ctl-next").onclick = () => { followNext(); cmd("next"); };
+  $("ctl-prev").onclick = () => { followNext(); cmd("prev"); };
   $("ctl-blank").onclick = () => cmd("blank");
 
   await loadBible(state.bibleId);
