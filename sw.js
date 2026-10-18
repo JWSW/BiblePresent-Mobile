@@ -1,6 +1,6 @@
 /* Offline support: the app and the Bibles are kept on the device; sermons that were opened are
    remembered too. Bump VERSION when publishing a new version of the web app. */
-const VERSION = "bp-mobile-1.3";
+const VERSION = "bp-mobile-1.4";
 const SERMON_CACHE = "bp-lists-sermons";  // kept across versions
 const SHELL = ["./", "index.html", "style.css", "app.js", "manifest.webmanifest",
                "icon-192.png", "icon-512.png", "apple-touch-icon.png", "data/sermons-index.json", "data/SV.json"];

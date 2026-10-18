@@ -672,12 +672,28 @@ async function detectLaptop() {
   } catch { return null; }
 }
 
+async function answers(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 2000);
+  try {
+    const res = await fetch(url, { cache: "no-store", signal: ctl.signal });
+    const info = res.ok ? await res.json() : null;
+    return Boolean(info && info.app === "biblepresent");
+  } catch { return false; } finally { clearTimeout(timer); }
+}
+
 async function initConnected(info) {
   // Reached by name (biblepresent.local)? Continue on the laptop's IP address: an iPad looks the
   // name up again every few minutes, which can hold commands up for seconds.
+  // Only to an address that answers: a laptop can also have VPN or VMware addresses the iPad cannot reach.
   if (location.hostname.endsWith(".local") && info.ips && info.ips.length) {
-    location.replace(`http://${info.ips[0]}:${info.port || location.port}/${location.hash}`);
-    return new Promise(() => {});  // the page is being replaced
+    const port = info.port || location.port;
+    for (const ip of info.ips.slice(0, 3)) {
+      if (await answers(`http://${ip}:${port}/api/info`)) {
+        location.replace(`http://${ip}:${port}/${location.hash}`);
+        return new Promise(() => {});  // the page is being replaced
+      }
+    }
   }
   conn.info = info;
   document.body.classList.add("connected");
