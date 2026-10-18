@@ -111,6 +111,36 @@ function toast(text) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => t.classList.remove("show"), 2200);
 }
+/** A small × inside a text field that empties it (shown while there is text). Safari's own one
+    only appears now and then. */
+function addClearButton(input) {
+  const wrap = el("span", "clearable");
+  input.replaceWith(wrap);
+  wrap.append(input);
+  const btn = el("button", "clear-btn", "×");
+  btn.type = "button";
+  btn.tabIndex = -1;
+  btn.setAttribute("aria-label", "Clear");
+  wrap.append(btn);
+  input.syncClear = () => wrap.classList.toggle("has-text", Boolean(input.value));
+  input.addEventListener("input", input.syncClear);
+  btn.addEventListener("pointerdown", (e) => e.preventDefault());  // keeps the keyboard as it is
+  btn.onclick = () => {
+    input.value = "";
+    input.syncClear();
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("search"));
+    input.focus();
+  };
+  input.syncClear();
+}
+/** Set a field's text from code (keeps its × right). */
+function setField(id, value) {
+  const input = $(id);
+  input.value = value;
+  if (input.syncClear) input.syncClear();
+}
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -433,7 +463,7 @@ async function openSermon(code, num, lang, searchText = null) {
   }
   applyParaFind();
   // a paragraph asked for by number must be visible
-  if (num && ol.querySelector(`li[data-n="${num}"].hidden`)) { $("para-find").value = ""; applyParaFind(); }
+  if (num && ol.querySelector(`li[data-n="${num}"].hidden`)) { setField("para-find", ""); applyParaFind(); }
   paintSelection();
   if (num) {
     scrollToItem("para-list", num);
@@ -761,7 +791,7 @@ async function onRefInput() {
     const bad = parts.filter((p) => !addFromText(p));
     toast(bad.length ? `Added ${parts.length - bad.length}; could not add: ${bad.join(", ")}`
                      : `Added ${parts.length} to the list`);
-    $("ref-input").value = bad.join("; ");   // keep only what could not be added
+    setField("ref-input", bad.join("; "));   // keep only what could not be added
     return;
   }
   const m = text.match(SERMON_RE);
@@ -1146,6 +1176,7 @@ async function init() {
   $("book-select").onchange = (e) => openChapter(+e.target.value, 1);
   $("chapter-select").onchange = (e) => openChapter(state.book, +e.target.value);
   $("ref-input").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); onRefInput(); } });
+  for (const id of ["ref-input", "sermon-find", "sermon-search", "para-find"]) addClearButton($(id));
   for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => setTab(b.dataset.tab);
   for (const b of document.querySelectorAll(".mode-switch button")) b.onclick = () => setMode(b.dataset.mode);
   $("addbar-add").onclick = addSelection;
