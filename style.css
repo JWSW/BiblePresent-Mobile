@@ -73,6 +73,13 @@ button.small { min-height: 36px; padding: 6px 12px; }
 
 .tabpane { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #sermons-pane > input { margin-bottom: 8px; }
+#year-select { flex: none; width: auto; }
+.para-find-row { align-items: center; }
+.count-hint { flex: none; color: var(--muted); font-size: 13px; white-space: nowrap; }
+/* words found by "Find in this sermon" or the text search, inside the paragraphs */
+.items mark { background: rgba(227, 129, 95, .28); color: inherit; font-weight: 700; border-radius: 3px;
+              padding: 0 1px; }
+.items li.sel.edge mark { background: #fff; color: #05344D; }
 .cols { flex: 1; display: flex; gap: 10px; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .col-title { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted);

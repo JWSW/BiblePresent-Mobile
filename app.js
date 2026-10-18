@@ -285,15 +285,103 @@ async function refreshSermonIndex() {
     if (!state.hits) renderSermonList();
   } catch { /* offline or slow server: keep the copy we have */ }
 }
+// ---------------------------------------------------------------- sermon years, finding and marking words
+/** 1947 for 47-0412; 9999 for codes without a year (CAB-01), which Message Hub also sorts last. */
+const yearOf = (code) => (/^\d\d-/.test(code) ? 1900 + Number(code.slice(0, 2)) : 9999);
+const wantedYear = () => Number($("year-select").value) || 0;  // 0 = all years
+
+function fillYearSelect() {
+  const sel = $("year-select");
+  const years = [...new Set(Object.keys(state.sermonIndex).map(yearOf))].sort((a, b) => a - b);
+  const want = ["", ...years.map(String)];
+  if ([...sel.options].map((o) => o.value).join() === want.join()) return;
+  const cur = sel.value;
+  sel.innerHTML = "";
+  for (const y of want) sel.add(new Option(y === "" ? "All years" : y === "9999" ? "Other" : y, y));
+  sel.value = want.includes(cur) ? cur : "";
+}
+
+/** "Find in this sermon": all the words, or a paragraph number ("14", "¶14"; 140-149 … while typing). */
+function paraMatches(n, text) {
+  const q = fold($("para-find").value).trim();
+  if (!q) return true;
+  const hay = fold(text);
+  const m = q.match(/^¶?\s*(\d+)$/);
+  if (m) return String(n).startsWith(m[1]) || new RegExp(`\\b${m[1]}\\b`).test(hay);
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+/** The words to mark: from "Find in this sermon", otherwise from the text search the sermon was opened from. */
+function markTerms() {
+  const q = fold($("para-find").value).trim();
+  const m = q.match(/^¶?\s*(\d+)$/);
+  if (m) return [m[1]];
+  const src = q || fold((state.sermon && state.sermon.searchText) || "");
+  return src.replace(/["“”„]/g, " ").split(/\s+/).filter((w) => w.length > 1);
+}
+/** The text as HTML with the terms in <mark> (accents and case ignored). */
+function markHtml(text, terms) {
+  if (!terms.length) return esc(text);
+  let folded = "";
+  const at = [];  // index in text for each character of folded
+  for (let i = 0; i < text.length; i++) {
+    const f = fold(text[i]);
+    for (let k = 0; k < f.length; k++) at.push(i);
+    folded += f;
+  }
+  const ranges = [];
+  for (const t of terms) {
+    for (let i = folded.indexOf(t); i >= 0; i = folded.indexOf(t, i + t.length)) {
+      ranges.push([at[i], at[i + t.length - 1] + 1]);
+    }
+  }
+  if (!ranges.length) return esc(text);
+  ranges.sort((a, b) => a[0] - b[0]);
+  let out = "", pos = 0;
+  for (const [s, e] of ranges) {
+    if (e <= pos) continue;
+    const from = Math.max(s, pos);
+    out += esc(text.slice(pos, from)) + "<mark>" + esc(text.slice(from, e)) + "</mark>";
+    pos = e;
+  }
+  return out + esc(text.slice(pos));
+}
+function applyParaFind() {
+  if (!state.sermon) return;
+  const terms = markTerms();
+  let shown = 0, total = 0;
+  for (const li of $("para-list").children) {
+    if (!li.dataset.n) continue;
+    const text = li.dataset.text;
+    const ok = paraMatches(Number(li.dataset.n), text);
+    li.classList.toggle("hidden", !ok);
+    li.querySelector(".t").innerHTML = markHtml(text, terms);
+    total++;
+    shown += ok;
+  }
+  $("para-count").textContent = $("para-find").value.trim() && total ? `${shown} of ${total}` : "";
+}
+/** Enter in "Find in this sermon": select the first match. */
+function firstParaMatch() {
+  const li = [...$("para-list").children].find((x) => x.dataset.n && !x.classList.contains("hidden"));
+  if (!li || !state.sermon) return;
+  const n = Number(li.dataset.n);
+  state.sel = { kind: "sermon", code: state.sermon.code, lang: state.sermon.lang, start: n, end: n };
+  paintSelection();
+  li.scrollIntoView({ block: "center" });
+}
+
 function renderSermonList() {
   state.hits = null;
+  fillYearSelect();
   const ul = $("sermon-list");
   const words = fold($("sermon-find").value).split(/\s+/).filter(Boolean);
+  const year = wantedYear();
   const codes = Object.keys(state.sermonIndex).sort((a, b) => (a.startsWith("CAB") - b.startsWith("CAB")) || a.localeCompare(b));
   ul.innerHTML = "";
   let shown = 0;
   for (const code of codes) {
     const info = state.sermonIndex[code];
+    if (year && yearOf(code) !== year) continue;
     if (words.length) {
       const hay = fold([code, ...Object.values(info).flat()].join(" "));
       if (!words.every((w) => hay.includes(w))) continue;
@@ -312,7 +400,7 @@ function renderSermonList() {
   if (!codes.length) ul.innerHTML = '<li class="info">The sermon list is loading…</li>';
 }
 const paraCache = {};
-async function openSermon(code, num, lang) {
+async function openSermon(code, num, lang, searchText = null) {
   code = code.toUpperCase();
   const info = state.sermonIndex[code] || {};
   lang = lang || (info[state.sermonLang] ? state.sermonLang : info.nl ? "nl" : "en");
@@ -331,17 +419,21 @@ async function openSermon(code, num, lang) {
     ol.innerHTML = `<li class="info">Could not load this sermon (${navigator.onLine ? e.message : "no internet"}).</li>`;
     return;
   }
-  state.sermon = { code, lang, paras: paraCache[key] };
+  state.sermon = { code, lang, paras: paraCache[key], searchText };
   if (state.sel && state.sel.kind === "sermon" && (state.sel.code !== code || state.sel.lang !== lang)) state.sel = null;
   if (num) state.sel = { kind: "sermon", code, lang, start: num, end: num };
   ol.innerHTML = "";
   for (const [n, text] of state.sermon.paras) {
     const li = el("li");
     li.dataset.n = n;
+    li.dataset.text = text;
     li.append(el("span", "n", n), el("span", "t", text));
     li.onclick = () => tapItem({ kind: "sermon", code, lang }, n);
     ol.appendChild(li);
   }
+  applyParaFind();
+  // a paragraph asked for by number must be visible
+  if (num && ol.querySelector(`li[data-n="${num}"].hidden`)) { $("para-find").value = ""; applyParaFind(); }
   paintSelection();
   if (num) {
     scrollToItem("para-list", num);
@@ -356,40 +448,91 @@ function renderParaLangs(code, lang) {
   for (const l of ["nl", "en"]) {
     if (!info[l]) continue;
     const b = el("button", l === lang ? "active" : "", l.toUpperCase());
-    b.onclick = () => { state.sermonLang = l; openSermon(code, state.sel && state.sel.code === code ? state.sel.start : null, l); };
+    b.onclick = () => {
+      state.sermonLang = l;
+      openSermon(code, state.sel && state.sel.code === code ? state.sel.start : null, l, state.sermon && state.sermon.searchText);
+    };
     box.appendChild(b);
   }
 }
 
 // full-text search on the Message Hub server (all sermons, no download needed)
-async function searchSermons(text, page = 1) {
-  const q = (lang, match) => api(`${lang}/sermons/search?` + new URLSearchParams({
+const SEARCH_LANGS = ["nl", "en"];
+const hitYear = (hit) => yearOf((hit.dateCode || "").toUpperCase());
+
+/** Message Hub cannot filter on a year, but it sorts the hits by date. Find the first page that
+    reaches the year by looking at several pages at once: about 4 rounds instead of 10 one by one. */
+async function seekYear(fetchPage, year, first, pages) {
+  const lastYear = (r) => { const qs = r.quotes || []; return qs.length ? hitYear(qs[qs.length - 1]) : 9999; };
+  const seen = new Map([[1, first]]);
+  let lo = 1, hi = pages;  // the answer is in [lo, hi]
+  while (lo < hi) {
+    const n = Math.min(6, hi - lo), probes = [];
+    for (let k = 0; k < n; k++) probes.push(lo + Math.floor(((hi - lo) * k) / n));
+    const res = await Promise.all(probes.map((p) => seen.get(p) || fetchPage(p)));
+    probes.forEach((p, i) => seen.set(p, res[i]));
+    for (let i = 0; i < probes.length; i++) {
+      if (lastYear(res[i]) < year) lo = probes[i] + 1;
+      else { hi = probes[i]; break; }
+    }
+  }
+  return { page: lo, pages, cached: seen.get(lo) };
+}
+
+// full-text search on the Message Hub server (all sermons, no download needed)
+async function searchSermons(text, more = false) {
+  const year = wantedYear();
+  const q = (lang, match, page) => api(`${lang}/sermons/search?` + new URLSearchParams({
     searchText: text, fullText: "false", languageCode: lang, filter: 0, match, pageNumber: page, sermonId: 0 }));
   const ul = $("sermon-list");
-  if (page === 1) { ul.innerHTML = '<li class="info">Searching…</li>'; state.hits = { text, page, items: [], total: 0 }; }
+  if (!more) {
+    ul.innerHTML = `<li class="info">Searching${year ? ` in ${year === 9999 ? "the other items" : year}` : ""}…</li>`;
+    state.hits = { text, year, items: [], total: 0, next: {} };
+  }
+  const h = state.hits;
   try {
-    let match = state.hits.match ?? 1;          // exact phrase first …
-    let res = await Promise.all(["nl", "en"].map((l) => q(l, match)));
-    if (page === 1 && res.every((r) => !r.pageInfo || !r.pageInfo.totalHits)) {
-      match = 0;                                 // … otherwise all the words
-      res = await Promise.all(["nl", "en"].map((l) => q(l, match)));
+    if (!more) {
+      let match = 1;  // exact phrase first …
+      let first = await Promise.all(SEARCH_LANGS.map((l) => q(l, match, 1)));
+      if (first.every((r) => !r.pageInfo || !r.pageInfo.totalHits)) {
+        match = 0;    // … otherwise all the words
+        first = await Promise.all(SEARCH_LANGS.map((l) => q(l, match, 1)));
+      }
+      h.match = match;
+      h.total = first.reduce((n, r) => n + ((r.pageInfo && r.pageInfo.totalHits) || 0), 0);
+      await Promise.all(SEARCH_LANGS.map(async (l, i) => {
+        const pages = (first[i].pageInfo && first[i].pageInfo.pageCount) || 0;
+        h.next[l] = !pages ? null : year ? await seekYear((p) => q(l, match, p), year, first[i], pages)
+                                         : { page: 1, pages, cached: first[i] };
+      }));
     }
-    state.hits.match = match;
-    state.hits.page = page;
-    state.hits.total = res.reduce((n, r) => n + ((r.pageInfo && r.pageInfo.totalHits) || 0), 0);
-    state.hits.more = res.some((r) => r.pageInfo && r.pageInfo.pageCount > page);
-    for (const r of res) for (const h of r.quotes || []) state.hits.items.push(h);
+    // one page per language
+    const got = await Promise.all(SEARCH_LANGS.map(async (l) => {
+      const n = h.next[l];
+      if (!n) return [];
+      const r = n.cached || await q(l, h.match, n.page);
+      const quotes = r.quotes || [];
+      const past = year && quotes.length && hitYear(quotes[quotes.length - 1]) > year;
+      h.next[l] = n.page < n.pages && !past ? { page: n.page + 1, pages: n.pages } : null;
+      return year ? quotes.filter((x) => hitYear(x) === year) : quotes;
+    }));
+    for (const g of got) h.items.push(...g);
+    h.more = SEARCH_LANGS.some((l) => h.next[l]);
   } catch (e) {
     ul.innerHTML = `<li class="info">${navigator.onLine ? "Search failed: " + e.message : "Searching needs internet."}</li>`;
     return;
   }
+  // with a year, a page can hold few hits of that year: read on until there is something to show
+  if (h.year && h.more && h.items.length < 20) return searchSermons(text, true);
   renderHits();
 }
 function renderHits() {
   const h = state.hits, ul = $("sermon-list");
   ul.innerHTML = "";
-  $("sermon-list-title").textContent = `FOUND · ${h.total} paragraph${h.total === 1 ? "" : "s"}` +
-    (h.match === 0 && h.total ? " (all words)" : "");
+  const count = h.year ? `${h.items.length}${h.more ? "+" : ""}` : `${h.total}`;
+  const n = h.year ? h.items.length : h.total;
+  $("sermon-list-title").textContent = `FOUND · ${count} paragraph${n === 1 ? "" : "s"}` +
+    (h.year ? ` in ${h.year === 9999 ? "other" : h.year}` : "") + (h.match === 0 && n ? " (all words)" : "");
   for (const q of h.items) {
     const li = el("li");
     const code = q.dateCode.toUpperCase();
@@ -402,14 +545,14 @@ function renderHits() {
     li.onclick = () => {
       for (const x of ul.querySelectorAll("li.active")) x.classList.remove("active");
       li.classList.add("active");
-      openSermon(code, q.blockNumber, q.languageCode);
+      openSermon(code, q.blockNumber, q.languageCode, h.text);
     };
     ul.appendChild(li);
   }
   if (!h.items.length) ul.innerHTML = '<li class="info">Nothing found.</li>';
   if (h.more) {
     const more = el("li", "more", "More results…");
-    more.onclick = () => { more.textContent = "Loading…"; searchSermons(h.text, h.page + 1); };
+    more.onclick = () => { more.textContent = "Loading…"; searchSermons(h.text, true); };
     ul.appendChild(more);
   }
 }
@@ -1014,6 +1157,14 @@ async function init() {
     if (t) { $("sermon-search").blur(); searchSermons(t); } else renderSermonList();
   });
   $("sermon-search").addEventListener("search", () => { if (!$("sermon-search").value.trim()) renderSermonList(); });
+  $("year-select").onchange = () => {
+    const t = $("sermon-search").value.trim();
+    if (state.hits && t) searchSermons(t); else renderSermonList();
+  };
+  $("para-find").addEventListener("input", applyParaFind);
+  $("para-find").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); $("para-find").blur(); firstParaMatch(); }
+  });
   $("list-select").onchange = (e) => { state.current = e.target.value; saveLists(); renderList(); };
   $("list-name").addEventListener("input", (e) => { currentList().name = e.target.value; saveLists(); renderLists(); });
   $("list-new").onclick = () => { const l = newList(); state.lists.push(l); state.current = l.id; saveLists(); renderList(); $("list-name").focus(); };

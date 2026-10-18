@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.4">
+<link rel="stylesheet" href="style.css?v=1.5">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -65,8 +65,11 @@
     </div>
 
     <div id="sermons-pane" class="tabpane hidden">
-      <input id="sermon-find" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
-             placeholder="Find sermon: code, title or place…  e.g. 56-0401M · Conqueror">
+      <div class="row">
+        <input id="sermon-find" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="Find sermon: code, title or place…  e.g. 56-0401M · Conqueror">
+        <select id="year-select" aria-label="Year"><option value="">All years</option></select>
+      </div>
       <form id="sermon-search-form" class="row">
         <input id="sermon-search" type="search" autocomplete="off" spellcheck="false" enterkeyhint="search"
                placeholder="Search the text of all sermons…  e.g. do you now believe">
@@ -80,6 +83,11 @@
         <div class="col para-col">
           <div class="col-title"><span id="para-title">PARAGRAPHS</span>
             <span class="lang-toggle" id="para-lang"></span></div>
+          <div class="row para-find-row">
+            <input id="para-find" type="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+                   enterkeyhint="search" placeholder="Find in this sermon: words or ¶ number">
+            <span id="para-count" class="count-hint"></span>
+          </div>
           <ol id="para-list" class="scroll items"></ol>
         </div>
       </div>
@@ -138,6 +146,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.4"></script>
+<script src="app.js?v=1.5"></script>
 </body>
 </html>
