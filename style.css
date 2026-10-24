@@ -14,6 +14,9 @@
 }
 
 * { box-sizing: border-box; }
+/* No zoom on a quick double tap (e.g. tapping Next fast); scrolling and pinch-to-zoom still work.
+   (#list-items .grip sets its own touch-action for dragging.) */
+* { touch-action: manipulation; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--text);
@@ -23,6 +26,8 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 button, input, select { font: inherit; color: inherit; }
+/* Safari zooms in on a text field with letters under 16px when it is tapped */
+input, select, textarea { font-size: 16px; }
 .hidden { display: none !important; }
 
 /* header */
