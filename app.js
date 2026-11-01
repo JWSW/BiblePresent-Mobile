@@ -588,6 +588,12 @@ function renderHits() {
 }
 
 // ---------------------------------------------------------------- the list
+/* A list holds passages ({kind: "bible" | "sermon", …, note?}) and free notes ({kind: "note", text})
+   that sit between them. Notes stay on the iPad: the laptop only ever gets the passages. */
+const isNote = (it) => it.kind === "note";
+const passages = (items) => items.filter((it) => !isNote(it));
+const withNote = (it, note) => (note ? { ...it, note } : it);
+
 function itemLabel(it) {
   if (it.kind === "sermon") return `${it.code} ¶${range(it.v1, it.v2)}  ${sermonTitle(it.code, it.lang)}`;
   return `${bookName(it.b)} ${it.c}:${range(it.v1, it.v2)}`;
@@ -630,7 +636,7 @@ function renderLists() {
   const sel = $("list-select");
   sel.innerHTML = "";
   state.lists.forEach((l, i) => {
-    const o = el("option", "", `${l.name || "List " + (i + 1)}  (${l.items.length})`);
+    const o = el("option", "", `${l.name || "List " + (i + 1)}  (${passages(l.items).length})`);
     o.value = l.id;
     sel.appendChild(o);
   });
@@ -641,12 +647,13 @@ function renderList() {
   if (conn.info) return renderRemote();
   const list = currentList(), ul = $("list-items");
   ul.innerHTML = "";
+  let num = 0;
   list.items.forEach((it, i) => {
     if (it.kind === "sermon" && !it.snippet && !fillSnippet.tried.has(it)) {
       fillSnippet.tried.add(it);  // one try per item and session (e.g. offline)
       fillSnippet(it);
     }
-    const li = el("li");
+    const li = el("li", isNote(it) ? "note" : "");
     const grip = el("span", "grip", "⠿");
     grip.title = "Drag to change the order";
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, (from, to) => {
@@ -654,17 +661,69 @@ function renderList() {
       saveLists();
     }));
     const body = el("div", "body");
-    body.append(el("div", "label", itemLabel(it)), el("div", "snip", itemSnippet(it)));
-    body.onclick = () => showItem(it);
+    const buttons = [];
+    if (isNote(it)) {
+      body.append(el("div", "note-text", it.text || "Empty note"));
+      body.onclick = () => editListNote(it);
+    } else {
+      body.append(el("div", "label", itemLabel(it)), el("div", "snip", itemSnippet(it)));
+      if (it.note) body.append(noteLine(it.note, () => editListNote(it)));
+      body.onclick = () => showItem(it);
+      const edit = el("button", "del", "✎");
+      edit.title = "Note on this passage";
+      edit.onclick = () => editListNote(it);
+      buttons.push(edit);
+    }
     const del = el("button", "del", "✕");
     del.title = "Remove";
     del.onclick = () => { list.items.splice(i, 1); saveLists(); renderList(); };
-    li.append(grip, el("span", "num", i + 1), body, del);
+    li.append(grip, el("span", "num", isNote(it) ? "" : ++num), body, ...buttons, del);
     ul.appendChild(li);
   });
   $("list-empty").classList.toggle("hidden", list.items.length > 0);
-  $("mode-count").textContent = list.items.length || "";
+  $("mode-count").textContent = num || "";
   renderLists();
+}
+/** The note on a passage, shown under it; tapping it edits the note. */
+function noteLine(text, onEdit) {
+  const line = el("div", "att-note", text);
+  line.onclick = (e) => { e.stopPropagation(); onEdit(); };
+  return line;
+}
+/** A note in a dialog. It is saved while typing; Done on an empty note deletes it. */
+function editNote({ title, text, onInput, onDelete }) {
+  showDialog(`<h2>${esc(title)}</h2>
+    <textarea id="note-text" rows="6" placeholder="Your note"></textarea>
+    <div class="buttons"><button id="n-del" class="ghost">Delete</button>
+      <button id="n-done" class="primary">Done</button></div>`, (d) => {
+    const ta = d.querySelector("#note-text");
+    ta.value = text || "";
+    ta.addEventListener("input", () => onInput(ta.value));
+    d.querySelector("#n-del").onclick = () => { closeDialog(); onDelete(); };
+    d.querySelector("#n-done").onclick = () => { closeDialog(); if (!ta.value.trim()) onDelete(); };
+    ta.focus();
+  });
+}
+/** A free note (kind "note") or the note on a passage of the list being prepared. */
+function editListNote(it) {
+  const list = currentList(), free = isNote(it);
+  editNote({
+    title: free ? "Note" : `Note · ${itemLabel(it)}`,
+    text: free ? it.text : it.note,
+    onInput: (v) => { if (free) it.text = v; else it.note = v; saveLists(); renderList(); },
+    onDelete: () => {
+      if (!free) delete it.note;
+      else if (list.items.includes(it)) list.items.splice(list.items.indexOf(it), 1);
+      saveLists(); renderList();
+    },
+  });
+}
+function addFreeNote() {
+  const it = { kind: "note", text: "" };
+  currentList().items.push(it);
+  saveLists(); renderList();
+  $("list-items").scrollTop = $("list-items").scrollHeight;
+  editListNote(it);
 }
 /** Drag an item by its grip. The item lifts and follows the finger (it is only moved visually,
     so iPadOS keeps tracking the finger); the other items glide out of the way; on release it
@@ -743,14 +802,14 @@ function showItem(it) {
 /** Text the Windows app understands (Service list ⋯ → Paste list): one passage per line. */
 function listAsText(list) {
   const lines = [`# ${list.name || "Bible Present list"}`];
-  for (const it of list.items) {
+  for (const it of passages(list.items)) {
     lines.push(it.kind === "sermon" ? `${it.code} ${range(it.v1, it.v2)}` : `${BOOKS_NL[it.b]} ${it.c}:${range(it.v1, it.v2)}`);
   }
   return lines.join("\n");
 }
 /** The same file format as the Windows app's Save list / Open list. */
 function listAsFile(list) {
-  const service = list.items.map((it) => it.kind === "sermon"
+  const service = passages(list.items).map((it) => it.kind === "sermon"
     ? { ref: itemLabel(it), kind: "sermon", code: it.code, v1: it.v1, v2: it.v2 }
     : { ref: `${BOOKS_NL[it.b]} ${it.c}:${range(it.v1, it.v2)}`, b: it.b, c: it.c, v1: it.v1, v2: it.v2 });
   const name = (list.name || "Bible Present list").replace(/[\\/:*?"<>|]+/g, "-").trim();
@@ -758,7 +817,7 @@ function listAsFile(list) {
 }
 async function shareFile() {
   const list = currentList();
-  if (!list.items.length) return toast("The list is empty.");
+  if (!passages(list.items).length) return toast("The list has no passages.");
   const file = listAsFile(list);
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -773,13 +832,85 @@ async function shareFile() {
 }
 async function shareText() {
   const list = currentList();
-  if (!list.items.length) return toast("The list is empty.");
-  const text = listAsText(list);
+  if (!passages(list.items).length) return toast("The list has no passages.");
+  await sendText(listAsText(list), list.name || "Bible Present list", "Copied: paste it in Bible Present (Paste list).");
+}
+async function sendText(text, title, copied) {
   try {
-    if (navigator.share) { await navigator.share({ text, title: list.name || "Bible Present list" }); return; }
+    if (navigator.share) { await navigator.share({ text, title }); return; }
   } catch (e) { if (e.name === "AbortError") return; }
-  try { await navigator.clipboard.writeText(text); toast("Copied: paste it in Bible Present (Paste list)."); }
+  try { await navigator.clipboard.writeText(text); toast(copied); }
   catch { prompt("Copy this text:", text); }
+}
+
+// ---------------------------------------------------------------- the outline: the whole list to read through
+/** [[number, text]] of a passage, or null for a sermon that is not loaded yet. */
+function passageParas(it) {
+  if (it.kind === "sermon") {
+    const paras = paraCache[`${sermonLang(it)}/${it.code}`];
+    return paras ? paras.filter(([n]) => n >= it.v1 && n <= (it.v2 || it.v1)) : null;
+  }
+  const out = [];
+  for (let v = it.v1; v <= (it.v2 || it.v1); v++) out.push([v, verseText(it.b, it.c, v)]);
+  return out;
+}
+const sermonLang = (it) => it.lang || ((state.sermonIndex[it.code] || {}).nl ? "nl" : "en");
+
+function showOutline() {
+  const list = currentList();
+  if (!list.items.length) return toast("The list is empty.");
+  showDialog(`<h2>${esc(list.name || "Outline")}</h2>
+    <div class="outline" id="outline"></div>
+    <div class="buttons"><button id="o-print" class="ghost">Print</button>
+      <button id="o-share" class="ghost">Share</button><button id="o-close" class="primary">Close</button></div>`, (d) => {
+    d.classList.add("wide");
+    d.querySelector("#o-close").onclick = closeDialog;
+    d.querySelector("#o-share").onclick = () =>
+      sendText(outlineText(list), list.name || "Outline", "Copied the outline.");
+    d.querySelector("#o-print").onclick = () => {
+      document.body.classList.add("printing");
+      window.print();
+      setTimeout(() => document.body.classList.remove("printing"), 500);
+    };
+    renderOutline(list);
+  });
+  // sermon texts that are not here yet: load them, then show them
+  const missing = passages(list.items).filter((it) => !passageParas(it));
+  Promise.all(missing.map(async (it) => {
+    const key = `${sermonLang(it)}/${it.code}`;
+    try {
+      const data = await api(`${sermonLang(it)}/sermons/${it.code}/blocks`);
+      paraCache[key] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
+    } catch { /* offline: the short preview stays */ }
+  })).then(() => { if (missing.length) renderOutline(list); });
+}
+function renderOutline(list) {
+  const box = $("outline");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const it of list.items) {
+    if (isNote(it)) { box.append(el("p", "o-note", it.text)); continue; }
+    const sec = el("div", "o-item");
+    sec.append(el("div", "o-ref", itemLabel(it)));
+    const paras = passageParas(it);
+    if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
+    else sec.append(el("p", "o-text", it.snippet || ""));
+    if (it.note) sec.append(el("p", "o-note", it.note));
+    box.append(sec);
+  }
+}
+function outlineText(list) {
+  const lines = [list.name || "Outline", ""];
+  for (const it of list.items) {
+    if (isNote(it)) { lines.push(`» ${it.text}`, ""); continue; }
+    lines.push(itemLabel(it));
+    const paras = passageParas(it);
+    if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
+    else if (it.snippet) lines.push(it.snippet);
+    if (it.note) lines.push(`» ${it.note}`);
+    lines.push("");
+  }
+  return lines.join("\n").trim();
 }
 
 // ---------------------------------------------------------------- the Go to / add box
@@ -825,13 +956,49 @@ const toService = (it) => it.kind === "sermon" ? { kind: "sermon", code: it.code
                                                : { kind: "bible", b: it.b, c: it.c, v1: it.v1, v2: it.v2 };
 const fromService = (d) => d.kind === "sermon" ? { kind: "sermon", code: d.code, v1: d.v1, v2: d.v2 }
                                                : { kind: "bible", b: d.b, c: d.c, v1: d.v1, v2: d.v2 };
+/** A list item with its notes (what travels to the console and back). */
+const toPlan = (it) => (isNote(it) ? { kind: "note", text: it.text || "" } : withNote(toService(it), it.note));
+const fromPlan = (d) => (isNote(d) ? { kind: "note", text: d.text || "" } : withNote(fromService(d), d.note));
+
+/** The laptop's service list with the notes of the prepared list (plan) in their places. A free note
+    follows the passage it followed in the plan; a note on a passage stays on that passage (a passage
+    in the list twice: counted in order). Notes whose passage is no longer there come last.
+    Returns [{item, planned}] for passages (planned: the plan's passage with its note) and [{note}]. */
+const refKey = (it) => it.kind === "sermon" ? `S ${String(it.code).toUpperCase()} ${it.v1}-${it.v2 || it.v1}`
+                                           : `B ${it.b} ${it.c} ${it.v1}-${it.v2 || it.v1}`;
+function weave(service, plan) {
+  const counter = () => { const seen = {}; return (it) => { const k = refKey(it); seen[k] = (seen[k] || 0) + 1; return `${k}#${seen[k]}`; }; };
+  const free = new Map(), planned = new Map();
+  let anchor = "^", anchorOf = counter();
+  for (const it of plan) {
+    if (isNote(it)) { if (!free.has(anchor)) free.set(anchor, []); free.get(anchor).push(it); }
+    else { anchor = anchorOf(it); planned.set(anchor, it); }
+  }
+  const out = [], used = new Set();
+  const notesAt = (a) => { used.add(a); for (const n of free.get(a) || []) out.push({ note: n }); };
+  anchorOf = counter();
+  notesAt("^");
+  for (const it of service) {
+    const a = anchorOf(it);
+    out.push({ item: it, planned: planned.get(a) });
+    planned.delete(a);
+    notesAt(a);
+  }
+  for (const [a, notes] of free) if (!used.has(a)) for (const n of notes) out.push({ note: n });
+  for (const p of planned.values()) if (p.note) out.push({ note: p, orphan: itemLabel(p) });
+  return out;
+}
+/** The woven list as list items again (a note whose passage is gone becomes a free note). */
+const wovenItems = (service, plan) => weave(service, plan).map((w) =>
+  w.item ? withNote(fromService(w.item), w.planned && w.planned.note)
+    : w.orphan ? { kind: "note", text: `${w.orphan}: ${w.note.note}` } : { kind: "note", text: w.note.text });
 
 function showDialog(html, onMount) {
   $("dialog").innerHTML = html;
   $("overlay").classList.remove("hidden");
   if (onMount) onMount($("dialog"));
 }
-function closeDialog() { $("overlay").classList.add("hidden"); $("dialog").innerHTML = ""; }
+function closeDialog() { $("overlay").classList.add("hidden"); $("dialog").innerHTML = ""; $("dialog").className = "dialog"; }
 
 /** Is this page served by Bible Present on a laptop? (Then it has an /api/info.) */
 async function detectLaptop() {
@@ -880,7 +1047,9 @@ async function initConnected(info) {
   const h = new URLSearchParams(location.hash.slice(1));
   if (h.get("ret")) { conn.ret = h.get("ret"); store.set("return", conn.ret); } else conn.ret = store.get("return", null);
   if (h.get("handoff")) { try { conn.handoff = b64dec(h.get("handoff")); } catch { } }
-  if (conn.handoff && conn.handoff.id) store.set("returnList", { id: conn.handoff.id, name: conn.handoff.name });
+  if (conn.handoff && conn.handoff.id) {  // the list with its notes, for the console and the way back
+    store.set("returnList", { id: conn.handoff.id, name: conn.handoff.name, plan: conn.handoff.plan || conn.handoff.items });
+  }
   conn.retList = store.get("returnList", null);
   $("back-btn").classList.toggle("hidden", !conn.ret);
   history.replaceState(null, "", location.pathname);  // keep the code etc. out of the address bar
@@ -1006,11 +1175,26 @@ function offerHandoff() {
   });
 }
 
-/** Back to the list app (on GitHub), taking the laptop's service list along. */
+/** Back to the list app (on GitHub), taking the laptop's service list along, with the notes. */
 function backToLists() {
-  const items = (conn.remote ? conn.remote.service : []).map(fromService);
   const list = conn.retList || {};
-  location.href = `${conn.ret}#return=${b64enc({ id: list.id, name: list.name, items })}`;
+  const items = wovenItems(conn.remote ? conn.remote.service : [], consolePlan());
+  location.href = `${conn.ret}#return=${b64enc({ id: list.id, name: list.name, items, woven: true })}`;
+}
+const consolePlan = () => (conn.retList && conn.retList.plan) || [];
+/** Notes in the console: edited here, kept on this iPad until going back to the lists. */
+function editConsoleNote(w) {
+  const plan = consolePlan(), free = !w.item && !w.orphan, n = w.item ? w.planned : w.note;
+  editNote({
+    title: free ? "Note" : `Note · ${w.item ? w.item.label : w.orphan}`,
+    text: free ? n.text : n.note,
+    onInput: (v) => { if (free) n.text = v; else n.note = v; store.set("returnList", conn.retList); renderRemote(); },
+    onDelete: () => {
+      if (!free) delete n.note;
+      else if (plan.includes(n)) plan.splice(plan.indexOf(n), 1);
+      store.set("returnList", conn.retList); renderRemote();
+    },
+  });
 }
 
 function renderRemote() {
@@ -1025,26 +1209,42 @@ function renderRemote() {
   }
   if (dragging) return;  // the list is redrawn when the drag ends
   ul.innerHTML = "";
-  r.service.forEach((it, i) => {
+  let i = 0;
+  for (const w of weave(r.service, consolePlan())) {
+    if (!w.item) {  // a note between the passages: only on this iPad, never on the laptop
+      const li = el("li", "note");
+      const body = el("div", "body");
+      body.append(el("div", "note-text", w.orphan ? `${w.orphan}: ${w.note.note}` : w.note.text || "Empty note"));
+      body.onclick = () => editConsoleNote(w);
+      li.append(el("span", "grip ghost-grip", "⠿"), el("span", "num", ""), body);
+      ul.appendChild(li);
+      continue;
+    }
+    const it = w.item;
+    i++;
     const li = el("li");
     li.dataset.id = it.id;
     li.classList.toggle("live", !!(r.live.on_air && r.live.item === it.id));
     li.classList.toggle("done", !!it.done);
     const grip = el("span", "grip", "⠿");
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, (from, to) => {
-      r.service.splice(to, 0, r.service.splice(from, 1)[0]);  // show it at once, then tell the laptop
+      const rows = [...ul.children];  // notes are rows too: take the new order of the passages
+      rows.splice(to, 0, rows.splice(from, 1)[0]);
+      const order = rows.filter((x) => x.dataset.id).map((x) => x.dataset.id);
+      r.service.sort((a, b) => order.indexOf(String(a.id)) - order.indexOf(String(b.id)));  // show it at once, then tell the laptop
       cmd("reorder", { ids: r.service.map((x) => x.id) });
     }));
     const body = el("div", "body");
     body.append(el("div", "label", it.label), el("div", "snip", it.snippet || ""));
+    if (w.planned && w.planned.note) body.append(noteLine(w.planned.note, () => editConsoleNote(w)));
     body.title = "Tap to put this on the screen";
     body.onclick = () => { followNext(); cmd("present_item", { id: it.id }); };
     const del = el("button", "del", "✕");
     del.title = "Remove from the service list";
     del.onclick = () => cmd("remove", { id: it.id });
-    li.append(grip, el("span", "num", it.done && !li.classList.contains("live") ? "✓" : i + 1), body, del);
+    li.append(grip, el("span", "num", it.done && !li.classList.contains("live") ? "✓" : i), body, del);
     ul.appendChild(li);
-  });
+  }
   $("list-empty").classList.toggle("hidden", r.service.length > 0);
   $("remote-count").textContent = r.service.length || "";
   $("mode-count").textContent = r.service.length || "";
@@ -1115,7 +1315,7 @@ function connectDialog() {
     <input id="addr" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(saved)}">
     <p>The laptop shows this address (and a QR code you can also scan with the camera).</p>
     ${list.items.length ? `<p><label><input type="checkbox" id="take" checked> Take “${esc(list.name || "this list")}” along
-      (${list.items.length} item${list.items.length === 1 ? "" : "s"})</label></p>` : ""}
+      (${countText(list.items)})</label></p>` : ""}
     <div class="buttons"><button id="c-cancel" class="ghost">Cancel</button>
       <button id="c-go" class="primary">Connect</button></div>`, (d) => {
     d.querySelector("#c-cancel").onclick = closeDialog;
@@ -1126,7 +1326,9 @@ function connectDialog() {
       const params = new URLSearchParams({ ret: location.href.split("#")[0] });
       const take = d.querySelector("#take");
       if (take && take.checked) {
-        params.set("handoff", b64enc({ id: list.id, name: list.name, items: list.items.map(toService) }));
+        // items: the passages (all a laptop up to 1.5.1 understands); plan: the whole list with the notes
+        params.set("handoff", b64enc({ id: list.id, name: list.name, items: passages(list.items).map(toService),
+                                       plan: list.items.map(toPlan) }));
       }
       location.href = `http://${addr}/#${params}`;
     };
@@ -1142,11 +1344,16 @@ function handleReturn() {
   try { data = b64dec(h.get("return")); } catch { return; }
   let list = state.lists.find((l) => l.id === data.id);
   if (!list) { list = newList(data.name || "From the laptop"); state.lists.push(list); }
-  list.items = (data.items || []).map(fromService);
+  // a console of a laptop up to 1.5.1 sends the passages only: put this list's notes back in between
+  list.items = data.woven ? (data.items || []).map(fromPlan) : wovenItems(data.items || [], list.items);
   state.current = list.id;
   saveLists();
   renderList();
-  toast(`“${list.name || "List"}” updated from the laptop (${list.items.length} items)`);
+  toast(`“${list.name || "List"}” updated from the laptop (${countText(list.items)})`);
+}
+function countText(items) {
+  const p = passages(items).length, n = items.length - p;
+  return `${p} passage${p === 1 ? "" : "s"}` + (n ? `, ${n} note${n === 1 ? "" : "s"}` : "");
 }
 
 // ---------------------------------------------------------------- tabs & modes
@@ -1207,6 +1414,8 @@ async function init() {
     state.current = state.lists[0].id;
     saveLists(); renderList();
   };
+  $("list-note").onclick = addFreeNote;
+  $("list-outline").onclick = showOutline;
   $("share-file").onclick = shareFile;
   $("share-text").onclick = shareText;
   $("connect-btn").onclick = connectDialog;

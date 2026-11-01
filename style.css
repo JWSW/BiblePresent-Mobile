@@ -3,12 +3,14 @@
   --text: #1F2B3B; --muted: #7C8796; --title: #324158;
   --blue: #109DE8; --coral: #E3815F; --navy: #324158;
   --sel: rgba(16, 157, 232, 0.16);
+  --note-bg: #FFF4D6; --note-text: #6B4E00;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #121925; --surface: #1C2533; --field: #161E2B; --hover: #283447; --border: #324158;
     --text: #EEF1F5; --muted: #98A3B3; --title: #FFFFFF; --sel: rgba(16, 157, 232, 0.28);
+    --note-bg: rgba(245, 200, 90, 0.14); --note-text: #F5D58A;
     color-scheme: dark;
   }
 }
@@ -183,6 +185,15 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 #list-items li.dragging .grip { cursor: grabbing; color: var(--blue); }
 #list-items .del { min-height: 36px; min-width: 36px; padding: 0; border: none;
                    background: transparent; color: var(--muted); font-size: 16px; }
+/* notes: free notes between the passages, and the note on a passage */
+#list-items li.note { background: var(--note-bg); }
+#list-items .note-text { color: var(--note-text); white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 4;
+                         -webkit-box-orient: vertical; overflow: hidden; }
+#list-items .att-note { color: var(--note-text); background: var(--note-bg); font-size: 13px; white-space: pre-line;
+                        border-radius: 6px; padding: 3px 8px; margin-top: 4px; }
+#list-items .ghost-grip { visibility: hidden; }
+.list-tools { display: flex; gap: 8px; margin-top: 10px; }
+.list-tools button { flex: 1; }
 .list-empty { color: var(--muted); text-align: center; padding: 18px 10px; }
 .list-actions { display: flex; gap: 8px; margin-top: 10px; }
 .list-actions .primary { flex: 1; }
@@ -240,6 +251,27 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .dialog .buttons.stacked { flex-direction: column-reverse; align-items: stretch; }
 .dialog .buttons.stacked button { width: 100%; min-height: 48px; }
 .dialog .error { color: var(--coral); font-weight: 600; min-height: 1.4em; }
+.dialog textarea { width: 100%; min-height: 160px; margin-bottom: 12px; padding: 10px 12px; resize: vertical;
+                   background: var(--field); color: inherit; border: 1px solid var(--border); border-radius: 10px;
+                   font-family: inherit; line-height: 1.4; outline: none; }
+.dialog textarea:focus { border-color: var(--blue); }
+.dialog.wide { width: min(760px, 100%); }
+.outline { max-height: 62vh; overflow-y: auto; margin-bottom: 12px; padding-right: 4px; }
+.outline .o-item { margin-bottom: 14px; }
+.outline .o-ref { font-weight: 800; color: var(--title); }
+.outline .o-text { margin: 2px 0; white-space: pre-line; }
+.outline .o-text .n { color: var(--coral); font-weight: 700; }
+.outline .o-note { margin: 4px 0 14px; padding: 6px 10px; border-radius: 8px; white-space: pre-line;
+                   background: var(--note-bg); color: var(--note-text); }
+.outline .o-item .o-note { margin-bottom: 0; }
+@media print {
+  html, body.printing { height: auto; overflow: visible; display: block; background: #fff; color: #000; }
+  body.printing > *:not(#overlay) { display: none !important; }
+  body.printing #overlay { position: static; background: none; padding: 0; display: block; }
+  body.printing .dialog { box-shadow: none; width: auto; padding: 0; }
+  body.printing .dialog .buttons { display: none; }
+  body.printing .outline { max-height: none; overflow: visible; }
+}
 
 .narrow-pickers { display: none; gap: 8px; margin-bottom: 8px; }
 .narrow-pickers select { flex: 1; }
