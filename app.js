@@ -654,6 +654,7 @@ function renderList() {
       fillSnippet(it);
     }
     const li = el("li", isNote(it) ? "note" : "");
+    li.classList.toggle("editing", !!noteSession && noteSession.target === it);
     const grip = el("span", "grip", "⠿");
     grip.title = "Drag to change the order";
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, (from, to) => {
@@ -663,7 +664,7 @@ function renderList() {
     const body = el("div", "body");
     const buttons = [];
     if (isNote(it)) {
-      body.append(el("div", "note-text", it.text || "Empty note"));
+      body.append(el("div", "note-text", noteText(it.text) || "Empty note"));
       body.onclick = () => editListNote(it);
     } else {
       body.append(el("div", "label", itemLabel(it)), el("div", "snip", itemSnippet(it)));
@@ -676,7 +677,10 @@ function renderList() {
     }
     const del = el("button", "del", "✕");
     del.title = "Remove";
-    del.onclick = () => { list.items.splice(i, 1); saveLists(); renderList(); };
+    del.onclick = () => {
+      if (noteSession && noteSession.target === it) { noteSession = null; $("note-pane").classList.add("hidden"); }
+      list.items.splice(i, 1); saveLists(); renderList();
+    };
     li.append(grip, el("span", "num", isNote(it) ? "" : ++num), body, ...buttons, del);
     ul.appendChild(li);
   });
@@ -684,37 +688,245 @@ function renderList() {
   $("mode-count").textContent = num || "";
   renderLists();
 }
-/** The note on a passage, shown under it; tapping it edits the note. */
-function noteLine(text, onEdit) {
-  const line = el("div", "att-note", text);
+/** The note on a passage, shown under it; tapping it opens the note. */
+function noteLine(html, onEdit) {
+  const line = el("div", "att-note", noteText(html));
   line.onclick = (e) => { e.stopPropagation(); onEdit(); };
   return line;
 }
-/** A note in a dialog. It is saved while typing; Done on an empty note deletes it. */
-function editNote({ title, text, onInput, onDelete }) {
-  showDialog(`<h2>${esc(title)}</h2>
-    <textarea id="note-text" rows="6" placeholder="Your note"></textarea>
-    <div class="buttons"><button id="n-del" class="ghost">Delete</button>
-      <button id="n-done" class="primary">Done</button></div>`, (d) => {
-    const ta = d.querySelector("#note-text");
-    ta.value = text || "";
-    ta.addEventListener("input", () => onInput(ta.value));
-    d.querySelector("#n-del").onclick = () => { closeDialog(); onDelete(); };
-    d.querySelector("#n-done").onclick = () => { closeDialog(); if (!ta.value.trim()) onDelete(); };
-    ta.focus();
-  });
+
+// ---------------------------------------------------------------- notes: formatted text, like Apple Notes
+/* A note is HTML with a few kinds of formatting (titles, bold…, lists, checklists). Notes written
+   before formatting existed are plain text. */
+const NOTE_TAGS = new Set(["DIV", "P", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "UL", "OL", "LI", "H1", "H2", "H3"]);
+const noteHtml = (s) => (!s ? "" : /^\s*</.test(s) ? s
+  : s.split("\n").map((l) => `<div>${l ? esc(l) : "<br>"}</div>`).join(""));
+/** Only the formatting a note can have: no scripts, links, pictures or styles (e.g. from pasting). */
+function cleanNote(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const walk = (n) => {
+    for (const c of [...n.childNodes]) {
+      if (c.nodeType === 3) continue;
+      if (c.nodeType !== 1 || /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|TEMPLATE|SVG|MATH)$/i.test(c.tagName)) { c.remove(); continue; }
+      walk(c);
+      if (!NOTE_TAGS.has(c.tagName)) { c.replaceWith(...c.childNodes); continue; }
+      for (const a of [...c.attributes]) {
+        if (a.name !== "class") c.removeAttribute(a.name);
+      }
+      if (c.hasAttribute("class")) {
+        const keep = [...c.classList].filter((x) => x === "checklist" || x === "checked");
+        if (keep.length) c.className = keep.join(" "); else c.removeAttribute("class");
+      }
+    }
+  };
+  walk(t.content);
+  return t.innerHTML;
 }
+/** The note as plain text (list previews, sharing): bullets, numbers and ☐/☑ in front of list items. */
+function noteText(s) {
+  const t = document.createElement("template");
+  t.innerHTML = cleanNote(noteHtml(s));
+  const out = [];
+  let cur = "";
+  const flush = () => { out.push(cur); cur = ""; };
+  const walk = (n) => {
+    for (const c of n.childNodes) {
+      if (c.nodeType === 3) { cur += c.textContent; continue; }
+      if (c.tagName === "BR") { flush(); continue; }
+      if (c.tagName === "LI") {
+        if (cur) flush();
+        const list = c.parentElement;
+        cur = list.classList.contains("checklist") ? (c.classList.contains("checked") ? "☑ " : "☐ ")
+          : list.tagName === "OL" ? `${[...list.children].indexOf(c) + 1}. ` : "• ";
+        walk(c);
+        flush();
+        continue;
+      }
+      const block = /^(DIV|P|H1|H2|H3|UL|OL)$/.test(c.tagName);
+      if (block && cur) flush();
+      walk(c);
+      if (block && cur) flush();
+    }
+  };
+  walk(t.content);
+  if (cur) flush();
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** The note that is open in the editor on the left: {target, title, html, passage, save, remove}. */
+let noteSession = null;
+let noteRender = 0;
+function openNoteEditor(s) {
+  closeNoteEditor(true);
+  noteSession = s;
+  s.backMode = $("layout").dataset.mode;
+  $("note-title").textContent = s.title;
+  const ed = $("note-editor");
+  ed.innerHTML = cleanNote(noteHtml(s.html)) || "<div><br></div>";
+  showNotePassage(s);
+  $("note-pane").classList.remove("hidden");
+  setMode("browse");  // phones: the editor is on the left side
+  ed.scrollTop = 0;
+  if (s.focus) placeCaretAtEnd(ed);
+  renderList();       // marks the note that is open
+}
+/** Done (or another note opened): an empty note is removed. */
+function closeNoteEditor(switching) {
+  const s = noteSession;
+  if (!s) return;
+  noteSession = null;
+  if (!noteText($("note-editor").innerHTML)) s.remove();
+  $("note-pane").classList.add("hidden");
+  $("note-editor").blur();
+  if (!switching) { setMode(s.backMode || "browse"); renderList(); }
+}
+function deleteOpenNote() {
+  const s = noteSession;
+  if (!s) return;
+  if (noteText($("note-editor").innerHTML) && !confirm("Delete this note?")) return;
+  s.remove();
+  $("note-editor").innerHTML = "";
+  closeNoteEditor();
+}
+function noteChanged() {
+  if (!noteSession) return;
+  noteSession.save(cleanNote($("note-editor").innerHTML));
+  clearTimeout(noteRender);
+  noteRender = setTimeout(renderList, 400);  // the preview in the list
+}
+/** A note on a passage: the passage's text stays visible above the note. */
+function showNotePassage(s) {
+  const box = $("note-passage"), it = s.passage;
+  box.classList.toggle("hidden", !it);
+  if (!it) return;
+  $("note-passage-ref").textContent = it.kind === "sermon" ? "QUOTE" : "BIBLE TEXT";
+  const text = $("note-passage-text");
+  const fill = () => {
+    text.innerHTML = "";
+    const paras = passageParas(it);
+    if (paras) for (const [n, t] of paras) { const p = el("p"); p.append(el("span", "n", n), " " + t); text.append(p); }
+    else text.append(el("p", "", it.snippet || "Loading…"));
+  };
+  fill();
+  if (!passageParas(it)) loadSermonParas(it).then(() => { if (noteSession === s) fill(); });
+}
+function placeCaretAtEnd(ed) {
+  ed.focus();
+  const r = document.createRange();
+  r.selectNodeContents(ed);
+  r.collapse(false);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+// the toolbar
+function editorBlock() {
+  const sel = getSelection(), ed = $("note-editor");
+  let n = sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+  const found = {};
+  while (n && n !== ed) {
+    if (n.nodeType === 1) {
+      if (!found.block && /^(DIV|P|H1|H2|H3|LI)$/.test(n.tagName)) found.block = n;
+      if (!found.list && /^(UL|OL)$/.test(n.tagName)) found.list = n;
+    }
+    n = n.parentNode;
+  }
+  return n === ed ? found : {};
+}
+function applyList(kind) {
+  const { list } = editorBlock();
+  if (kind === "check") {
+    if (list && list.classList.contains("checklist")) { document.execCommand("insertUnorderedList"); return; }  // off
+    if (!list || list.tagName === "OL") document.execCommand("insertUnorderedList");
+    const now = editorBlock().list;
+    if (now) now.classList.add("checklist");
+  } else if (kind === "ul" && list && list.classList.contains("checklist")) list.classList.remove("checklist");
+  else document.execCommand(kind === "ol" ? "insertOrderedList" : "insertUnorderedList");
+}
+function applyBlock(tag) {
+  const { block, list } = editorBlock();
+  if (list) applyList(list.tagName === "OL" ? "ol" : list.classList.contains("checklist") ? "check" : "ul");  // out of the list first
+  const same = block && block.tagName === tag.toUpperCase();
+  document.execCommand("formatBlock", false, `<${same ? "div" : tag}>`);
+}
+function updateToolbar() {
+  if (!noteSession) return;
+  const { block, list } = editorBlock();
+  const tag = block ? block.tagName : "";
+  for (const b of $("note-tools").querySelectorAll("button")) {
+    let on = false;
+    if (b.dataset.cmd) { try { on = document.queryCommandState(b.dataset.cmd); } catch { } }
+    else if (b.dataset.block === "div") on = !list && /^(DIV|P|)$/.test(tag);
+    else if (b.dataset.block) on = tag === b.dataset.block.toUpperCase();
+    else if (b.dataset.list) {
+      on = !!list && (b.dataset.list === "check" ? list.classList.contains("checklist")
+        : b.dataset.list === "ol" ? list.tagName === "OL" : list.tagName === "UL" && !list.classList.contains("checklist"));
+    }
+    b.classList.toggle("active", on);
+  }
+}
+/** "- " or "* " starts a bullet list, "1. " a numbered list and "[] " a checklist, as in Notes. */
+function autoList(e) {
+  if (e.inputType !== "insertText" || e.data !== " ") return;
+  const sel = getSelection(), node = sel.anchorNode, ed = $("note-editor");
+  if (!node || node.nodeType !== 3 || node.previousSibling) return;
+  const m = node.data.replace(/ /g, " ").match(/^(?:([-*•])|(1[.)])|(\[\]))\s$/);
+  const parent = node.parentNode;
+  if (!m || parent === ed || !ed.contains(parent) || !/^(DIV|P)$/.test(parent.tagName) || parent.closest("ul, ol")) return;
+  if (node.nextSibling && !(node.nextSibling.tagName === "BR" && !node.nextSibling.nextSibling)) return;
+  const list = document.createElement(m[2] ? "ol" : "ul");
+  if (m[3]) list.className = "checklist";
+  const li = document.createElement("li");
+  li.innerHTML = "<br>";
+  list.append(li);
+  parent.replaceWith(list);
+  const r = document.createRange();
+  r.setStart(li, 0);
+  r.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+function initNoteEditor() {
+  const ed = $("note-editor");
+  try { document.execCommand("defaultParagraphSeparator", false, "div"); document.execCommand("styleWithCSS", false, false); } catch { }
+  ed.addEventListener("input", (e) => { autoList(e); noteChanged(); updateToolbar(); });
+  ed.addEventListener("paste", (e) => {  // pasted text comes in as text (no fonts or colours from elsewhere)
+    e.preventDefault();
+    document.execCommand("insertText", false, (e.clipboardData || window.clipboardData).getData("text/plain"));
+  });
+  ed.addEventListener("click", (e) => {  // tap the circle of a checklist item: done / not done
+    const li = e.target.closest && e.target.closest("ul.checklist > li");
+    if (li && e.clientX - li.getBoundingClientRect().left < 30) { li.classList.toggle("checked"); noteChanged(); }
+  });
+  document.addEventListener("selectionchange", updateToolbar);
+  for (const b of $("note-tools").querySelectorAll("button")) {
+    b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the cursor (and keyboard) in the note
+    b.onclick = () => {
+      if (!ed.contains(getSelection().anchorNode)) placeCaretAtEnd(ed);
+      if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
+      else if (b.dataset.block) applyBlock(b.dataset.block);
+      else applyList(b.dataset.list);
+      noteChanged();
+      updateToolbar();
+    };
+  }
+  $("note-done").onclick = () => closeNoteEditor();
+  $("note-delete").onclick = deleteOpenNote;
+}
+
 /** A free note (kind "note") or the note on a passage of the list being prepared. */
 function editListNote(it) {
   const list = currentList(), free = isNote(it);
-  editNote({
-    title: free ? "Note" : `Note · ${itemLabel(it)}`,
-    text: free ? it.text : it.note,
-    onInput: (v) => { if (free) it.text = v; else it.note = v; saveLists(); renderList(); },
-    onDelete: () => {
+  const html = free ? it.text : it.note;
+  openNoteEditor({
+    target: it, title: free ? "Note" : itemLabel(it), html, passage: free ? null : it, focus: !html,
+    save: (h) => { if (free) it.text = h; else it.note = h; saveLists(); },
+    remove: () => {
       if (!free) delete it.note;
       else if (list.items.includes(it)) list.items.splice(list.items.indexOf(it), 1);
-      saveLists(); renderList();
+      saveLists();
     },
   });
 }
@@ -793,6 +1005,7 @@ function startDrag(e, li, grip, onDrop) {
   schedule();
 }
 function showItem(it) {
+  closeNoteEditor();
   setMode("browse");
   if (it.kind === "sermon") { setTab("sermons"); openSermon(it.code, it.v1, it.lang); }
   else { setTab("bible"); openChapter(it.b, it.c, { start: it.v1, end: it.v2 }); }
@@ -876,38 +1089,45 @@ function showOutline() {
   });
   // sermon texts that are not here yet: load them, then show them
   const missing = passages(list.items).filter((it) => !passageParas(it));
-  Promise.all(missing.map(async (it) => {
-    const key = `${sermonLang(it)}/${it.code}`;
-    try {
-      const data = await api(`${sermonLang(it)}/sermons/${it.code}/blocks`);
-      paraCache[key] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
-    } catch { /* offline: the short preview stays */ }
-  })).then(() => { if (missing.length) renderOutline(list); });
+  Promise.all(missing.map(loadSermonParas)).then(() => { if (missing.length) renderOutline(list); });
+}
+async function loadSermonParas(it) {
+  if (it.kind !== "sermon") return;
+  try {
+    const data = await api(`${sermonLang(it)}/sermons/${it.code}/blocks`);
+    paraCache[`${sermonLang(it)}/${it.code}`] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
+  } catch { /* offline: the short preview stays */ }
+}
+/** A note as formatted text in the outline. */
+function noteBlock(html) {
+  const box = el("div", "o-note note-doc");
+  box.innerHTML = cleanNote(noteHtml(html));
+  return box;
 }
 function renderOutline(list) {
   const box = $("outline");
   if (!box) return;
   box.innerHTML = "";
   for (const it of list.items) {
-    if (isNote(it)) { box.append(el("p", "o-note", it.text)); continue; }
+    if (isNote(it)) { box.append(noteBlock(it.text)); continue; }
     const sec = el("div", "o-item");
     sec.append(el("div", "o-ref", itemLabel(it)));
     const paras = passageParas(it);
     if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
     else sec.append(el("p", "o-text", it.snippet || ""));
-    if (it.note) sec.append(el("p", "o-note", it.note));
+    if (it.note) sec.append(noteBlock(it.note));
     box.append(sec);
   }
 }
 function outlineText(list) {
   const lines = [list.name || "Outline", ""];
   for (const it of list.items) {
-    if (isNote(it)) { lines.push(`» ${it.text}`, ""); continue; }
+    if (isNote(it)) { lines.push(noteText(it.text), ""); continue; }
     lines.push(itemLabel(it));
     const paras = passageParas(it);
     if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
     else if (it.snippet) lines.push(it.snippet);
-    if (it.note) lines.push(`» ${it.note}`);
+    if (it.note) lines.push(noteText(it.note));
     lines.push("");
   }
   return lines.join("\n").trim();
@@ -991,7 +1211,7 @@ function weave(service, plan) {
 /** The woven list as list items again (a note whose passage is gone becomes a free note). */
 const wovenItems = (service, plan) => weave(service, plan).map((w) =>
   w.item ? withNote(fromService(w.item), w.planned && w.planned.note)
-    : w.orphan ? { kind: "note", text: `${w.orphan}: ${w.note.note}` } : { kind: "note", text: w.note.text });
+    : w.orphan ? { kind: "note", text: `<h3>${esc(w.orphan)}</h3>${noteHtml(w.note.note)}` } : { kind: "note", text: w.note.text });
 
 function showDialog(html, onMount) {
   $("dialog").innerHTML = html;
@@ -1185,14 +1405,15 @@ const consolePlan = () => (conn.retList && conn.retList.plan) || [];
 /** Notes in the console: edited here, kept on this iPad until going back to the lists. */
 function editConsoleNote(w) {
   const plan = consolePlan(), free = !w.item && !w.orphan, n = w.item ? w.planned : w.note;
-  editNote({
-    title: free ? "Note" : `Note · ${w.item ? w.item.label : w.orphan}`,
-    text: free ? n.text : n.note,
-    onInput: (v) => { if (free) n.text = v; else n.note = v; store.set("returnList", conn.retList); renderRemote(); },
-    onDelete: () => {
+  const keep = () => store.set("returnList", conn.retList);
+  openNoteEditor({
+    target: n, title: free ? "Note" : w.item ? w.item.label : w.orphan, html: free ? n.text : n.note,
+    passage: free ? null : w.item ? fromService(w.item) : n,
+    save: (h) => { if (free) n.text = h; else n.note = h; keep(); },
+    remove: () => {
       if (!free) delete n.note;
       else if (plan.includes(n)) plan.splice(plan.indexOf(n), 1);
-      store.set("returnList", conn.retList); renderRemote();
+      keep();
     },
   });
 }
@@ -1213,8 +1434,9 @@ function renderRemote() {
   for (const w of weave(r.service, consolePlan())) {
     if (!w.item) {  // a note between the passages: only on this iPad, never on the laptop
       const li = el("li", "note");
+      li.classList.toggle("editing", !!noteSession && noteSession.target === w.note);
       const body = el("div", "body");
-      body.append(el("div", "note-text", w.orphan ? `${w.orphan}: ${w.note.note}` : w.note.text || "Empty note"));
+      body.append(el("div", "note-text", w.orphan ? `${w.orphan}: ${noteText(w.note.note)}` : noteText(w.note.text) || "Empty note"));
       body.onclick = () => editConsoleNote(w);
       li.append(el("span", "grip ghost-grip", "⠿"), el("span", "num", ""), body);
       ul.appendChild(li);
@@ -1224,6 +1446,7 @@ function renderRemote() {
     i++;
     const li = el("li");
     li.dataset.id = it.id;
+    li.classList.toggle("editing", !!noteSession && !!w.planned && noteSession.target === w.planned);
     li.classList.toggle("live", !!(r.live.on_air && r.live.item === it.id));
     li.classList.toggle("done", !!it.done);
     const grip = el("span", "grip", "⠿");
@@ -1403,12 +1626,14 @@ async function init() {
   $("para-find").addEventListener("keydown", (e) => {
     if (e.key === "Enter") { e.preventDefault(); $("para-find").blur(); firstParaMatch(); }
   });
-  $("list-select").onchange = (e) => { state.current = e.target.value; saveLists(); renderList(); };
+  initNoteEditor();
+  $("list-select").onchange = (e) => { closeNoteEditor(); state.current = e.target.value; saveLists(); renderList(); };
   $("list-name").addEventListener("input", (e) => { currentList().name = e.target.value; saveLists(); renderLists(); });
-  $("list-new").onclick = () => { const l = newList(); state.lists.push(l); state.current = l.id; saveLists(); renderList(); $("list-name").focus(); };
+  $("list-new").onclick = () => { closeNoteEditor(); const l = newList(); state.lists.push(l); state.current = l.id; saveLists(); renderList(); $("list-name").focus(); };
   $("list-delete").onclick = () => {
     const l = currentList();
-    if (l.items.length && !confirm(`Delete “${l.name || "this list"}” with ${l.items.length} items?`)) return;
+    if (l.items.length && !confirm(`Delete “${l.name || "this list"}” (${countText(l.items)})?`)) return;
+    closeNoteEditor();
     state.lists = state.lists.filter((x) => x.id !== l.id);
     if (!state.lists.length) state.lists.push(newList());
     state.current = state.lists[0].id;

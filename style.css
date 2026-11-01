@@ -30,6 +30,7 @@ body {
 button, input, select { font: inherit; color: inherit; }
 /* Safari zooms in on a text field with letters under 16px when it is tapped */
 input, select, textarea { font-size: 16px; }
+[contenteditable] { -webkit-user-select: text; user-select: text; }
 .hidden { display: none !important; }
 
 /* header */
@@ -192,6 +193,38 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 #list-items .att-note { color: var(--note-text); background: var(--note-bg); font-size: 13px; white-space: pre-line;
                         border-radius: 6px; padding: 3px 8px; margin-top: 4px; }
 #list-items .ghost-grip { visibility: hidden; }
+#list-items .att-note { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+#list-items li.editing { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+/* the note editor, over the Bible / Sermons side (like Apple Notes) */
+.note-pane { position: absolute; inset: 0; z-index: 6; background: var(--surface); border-radius: 14px;
+             display: flex; flex-direction: column; padding: 10px 12px 12px; gap: 8px; }
+.note-head { display: flex; align-items: center; gap: 8px; }
+.note-title { flex: 1; font-weight: 800; color: var(--title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-passage { background: var(--field); border-radius: 10px; padding: 6px 12px; flex: none; }
+.note-passage summary { cursor: pointer; font-size: 12px; font-weight: 700; letter-spacing: 1px; color: var(--muted); }
+.note-passage-text { max-height: 26vh; overflow-y: auto; padding: 4px 0 2px; }
+.note-passage-text p { margin: 4px 0; white-space: pre-line; }
+.note-passage-text .n { color: var(--coral); font-weight: 700; }
+.note-tools { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; flex: none; }
+.note-tools button { min-height: 36px; padding: 4px 10px; font-weight: 600; }
+.note-tools button.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.note-tools .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+.note-editor { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; outline: none; font-size: 17px;
+               line-height: 1.5; padding: 6px 4px 40vh; -webkit-user-select: text; user-select: text; }
+/* formatting inside notes (editor and outline) */
+.note-doc h1 { font-size: 1.6em; margin: .3em 0 .2em; line-height: 1.2; }
+.note-doc h2 { font-size: 1.3em; margin: .3em 0 .2em; line-height: 1.25; }
+.note-doc h3 { font-size: 1.1em; margin: .3em 0 .1em; }
+.note-doc ul, .note-doc ol { margin: .2em 0; padding-left: 1.6em; }
+.note-doc ul.checklist { list-style: none; padding-left: .2em; }
+.note-doc ul.checklist > li { position: relative; padding-left: 1.8em; }
+.note-doc ul.checklist > li::before { content: ""; position: absolute; left: 0; top: .2em; width: 1.05em; height: 1.05em;
+                                      border: 2px solid var(--muted); border-radius: 50%; box-sizing: border-box; cursor: pointer; }
+.note-doc ul.checklist > li.checked::before { background: var(--coral); border-color: var(--coral); }
+.note-doc ul.checklist > li.checked::after { content: "✓"; position: absolute; left: .22em; top: .05em; font-size: .8em;
+                                             color: #fff; font-weight: 800; }
+.note-doc ul.checklist > li.checked { color: var(--muted); }
 .list-tools { display: flex; gap: 8px; margin-top: 10px; }
 .list-tools button { flex: 1; }
 .list-empty { color: var(--muted); text-align: center; padding: 18px 10px; }
@@ -251,17 +284,13 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .dialog .buttons.stacked { flex-direction: column-reverse; align-items: stretch; }
 .dialog .buttons.stacked button { width: 100%; min-height: 48px; }
 .dialog .error { color: var(--coral); font-weight: 600; min-height: 1.4em; }
-.dialog textarea { width: 100%; min-height: 160px; margin-bottom: 12px; padding: 10px 12px; resize: vertical;
-                   background: var(--field); color: inherit; border: 1px solid var(--border); border-radius: 10px;
-                   font-family: inherit; line-height: 1.4; outline: none; }
-.dialog textarea:focus { border-color: var(--blue); }
 .dialog.wide { width: min(760px, 100%); }
 .outline { max-height: 62vh; overflow-y: auto; margin-bottom: 12px; padding-right: 4px; }
 .outline .o-item { margin-bottom: 14px; }
 .outline .o-ref { font-weight: 800; color: var(--title); }
 .outline .o-text { margin: 2px 0; white-space: pre-line; }
 .outline .o-text .n { color: var(--coral); font-weight: 700; }
-.outline .o-note { margin: 4px 0 14px; padding: 6px 10px; border-radius: 8px; white-space: pre-line;
+.outline .o-note { margin: 4px 0 14px; padding: 6px 10px; border-radius: 8px;
                    background: var(--note-bg); color: var(--note-text); }
 .outline .o-item .o-note { margin-bottom: 0; }
 @media print {

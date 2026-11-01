@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.8">
+<link rel="stylesheet" href="style.css?v=1.9">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -93,6 +93,35 @@
       </div>
     </div>
 
+    <!-- a note, opened from the list: over the Bible / Sermons side -->
+    <div class="note-pane hidden" id="note-pane">
+      <div class="note-head">
+        <span class="note-title" id="note-title">Note</span>
+        <button id="note-delete" class="ghost small">Delete</button>
+        <button id="note-done" class="primary small">Done</button>
+      </div>
+      <details class="note-passage hidden" id="note-passage" open>
+        <summary id="note-passage-ref"></summary>
+        <div class="note-passage-text" id="note-passage-text"></div>
+      </details>
+      <div class="note-tools" id="note-tools">
+        <button data-block="h1">Title</button>
+        <button data-block="h2">Heading</button>
+        <button data-block="h3">Subheading</button>
+        <button data-block="div">Body</button>
+        <span class="sep"></span>
+        <button data-cmd="bold" aria-label="Bold"><b>B</b></button>
+        <button data-cmd="italic" aria-label="Italic"><i>I</i></button>
+        <button data-cmd="underline" aria-label="Underline"><u>U</u></button>
+        <button data-cmd="strikeThrough" aria-label="Strikethrough"><s>S</s></button>
+        <span class="sep"></span>
+        <button data-list="ul" aria-label="Bulleted list">• ≡</button>
+        <button data-list="ol" aria-label="Numbered list">1. ≡</button>
+        <button data-list="check" aria-label="Checklist">◯ ≡</button>
+      </div>
+      <div class="note-editor note-doc" id="note-editor" contenteditable="true" spellcheck="true"></div>
+    </div>
+
     <div class="addbar hidden" id="addbar">
       <span id="addbar-label"></span>
       <button id="addbar-clear" class="ghost">Clear</button>
@@ -150,6 +179,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.8"></script>
+<script src="app.js?v=1.9"></script>
 </body>
 </html>
