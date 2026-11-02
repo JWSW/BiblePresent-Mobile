@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.9">
+<link rel="stylesheet" href="style.css?v=1.10">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -28,6 +28,7 @@
     <button data-mode="browse" class="active">Browse</button>
     <button data-mode="list">List <span id="mode-count" class="count"></span></button>
   </nav>
+  <button id="help-btn" class="help-btn" aria-label="Help">?</button>
 </header>
 
 <main class="layout" id="layout" data-mode="browse">
@@ -105,6 +106,9 @@
         <div class="note-passage-text" id="note-passage-text"></div>
       </details>
       <div class="note-tools" id="note-tools">
+        <button data-cmd="undo" aria-label="Undo">↶</button>
+        <button data-cmd="redo" aria-label="Redo">↷</button>
+        <span class="sep"></span>
         <button data-block="h1">Title</button>
         <button data-block="h2">Heading</button>
         <button data-block="h3">Subheading</button>
@@ -114,6 +118,7 @@
         <button data-cmd="italic" aria-label="Italic"><i>I</i></button>
         <button data-cmd="underline" aria-label="Underline"><u>U</u></button>
         <button data-cmd="strikeThrough" aria-label="Strikethrough"><s>S</s></button>
+        <button data-cmd="hilite" aria-label="Marker"><span class="marker-icon">A</span></button>
         <span class="sep"></span>
         <button data-list="ul" aria-label="Bulleted list">• ≡</button>
         <button data-list="ol" aria-label="Numbered list">1. ≡</button>
@@ -137,6 +142,7 @@
       <select id="list-select" aria-label="List"></select>
       <button id="list-new" class="ghost small">New list</button>
       <button id="list-delete" class="ghost small" title="Delete this list">Delete</button>
+      <button id="list-menu" class="ghost small" aria-label="More: recently deleted, backup, help">⋯</button>
     </div>
     <input id="list-name" class="list-name prep-only" type="text" placeholder="Name of this list (e.g. Sunday 19 October)">
     <!-- connected to the laptop -->
@@ -179,6 +185,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.9"></script>
+<script src="app.js?v=1.10"></script>
 </body>
 </html>

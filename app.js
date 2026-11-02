@@ -670,7 +670,7 @@ function renderList() {
       body.append(el("div", "label", itemLabel(it)), el("div", "snip", itemSnippet(it)));
       if (it.note) body.append(noteLine(it.note, () => editListNote(it)));
       body.onclick = () => showItem(it);
-      const edit = el("button", "del", "✎");
+      const edit = el("button", "del note-btn", "✎");
       edit.title = "Note on this passage";
       edit.onclick = () => editListNote(it);
       buttons.push(edit);
@@ -679,6 +679,7 @@ function renderList() {
     del.title = "Remove";
     del.onclick = () => {
       if (noteSession && noteSession.target === it) { noteSession = null; $("note-pane").classList.add("hidden"); }
+      if (noteText(isNote(it) ? it.text : it.note)) trashPut({ type: "item", listId: list.id, listName: list.name, item: it, index: i });
       list.items.splice(i, 1); saveLists(); renderList();
     };
     li.append(grip, el("span", "num", isNote(it) ? "" : ++num), body, ...buttons, del);
@@ -698,7 +699,22 @@ function noteLine(html, onEdit) {
 // ---------------------------------------------------------------- notes: formatted text, like Apple Notes
 /* A note is HTML with a few kinds of formatting (titles, bold…, lists, checklists). Notes written
    before formatting existed are plain text. */
-const NOTE_TAGS = new Set(["DIV", "P", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "UL", "OL", "LI", "H1", "H2", "H3"]);
+const NOTE_TAGS = new Set(["DIV", "P", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "MARK", "UL", "OL", "LI", "H1", "H2", "H3"]);
+/* The marker: in the editor a coloured background (so Safari can switch it off again), saved as <mark>. */
+const HIGHLIGHT = "rgba(255, 204, 0, 0.45)";
+const isMarker = (c) => c.tagName === "SPAN" && /255,\s*204,\s*0/.test(c.style.backgroundColor || "");
+/** A saved note made ready for the editor: <mark> becomes the coloured background again. */
+function editableNote(html) {
+  const t = document.createElement("template");
+  t.innerHTML = cleanNote(noteHtml(html));
+  for (const m of t.content.querySelectorAll("mark")) {
+    const s = document.createElement("span");
+    s.style.backgroundColor = HIGHLIGHT;
+    s.append(...m.childNodes);
+    m.replaceWith(s);
+  }
+  return t.innerHTML;
+}
 const noteHtml = (s) => (!s ? "" : /^\s*</.test(s) ? s
   : s.split("\n").map((l) => `<div>${l ? esc(l) : "<br>"}</div>`).join(""));
 /** Only the formatting a note can have: no scripts, links, pictures or styles (e.g. from pasting). */
@@ -710,6 +726,7 @@ function cleanNote(html) {
       if (c.nodeType === 3) continue;
       if (c.nodeType !== 1 || /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|TEMPLATE|SVG|MATH)$/i.test(c.tagName)) { c.remove(); continue; }
       walk(c);
+      if (isMarker(c)) { const m = document.createElement("mark"); m.append(...c.childNodes); c.replaceWith(m); continue; }
       if (!NOTE_TAGS.has(c.tagName)) { c.replaceWith(...c.childNodes); continue; }
       for (const a of [...c.attributes]) {
         if (a.name !== "class") c.removeAttribute(a.name);
@@ -763,7 +780,7 @@ function openNoteEditor(s) {
   s.backMode = $("layout").dataset.mode;
   $("note-title").textContent = s.title;
   const ed = $("note-editor");
-  ed.innerHTML = cleanNote(noteHtml(s.html)) || "<div><br></div>";
+  ed.innerHTML = editableNote(s.html) || "<div><br></div>";
   showNotePassage(s);
   $("note-pane").classList.remove("hidden");
   setMode("browse");  // phones: the editor is on the left side
@@ -784,7 +801,11 @@ function closeNoteEditor(switching) {
 function deleteOpenNote() {
   const s = noteSession;
   if (!s) return;
-  if (noteText($("note-editor").innerHTML) && !confirm("Delete this note?")) return;
+  const html = cleanNote($("note-editor").innerHTML);
+  if (noteText(html)) {
+    if (!confirm("Delete this note? You can get it back from ⋯ → Recently deleted.")) return;
+    if (s.trash) s.trash(html);
+  }
   s.remove();
   $("note-editor").innerHTML = "";
   closeNoteEditor();
@@ -835,8 +856,10 @@ function editorBlock() {
   }
   return n === ed ? found : {};
 }
+const listKind = (list) => (list.tagName === "OL" ? "ol" : list.classList.contains("checklist") ? "check" : "ul");
 function applyList(kind) {
-  const { list } = editorBlock();
+  const ed = $("note-editor"), { list } = editorBlock();
+  const was = new Map([...ed.querySelectorAll("li")].map((li) => [li, listKind(li.parentElement)]));
   if (kind === "check") {
     if (list && list.classList.contains("checklist")) { document.execCommand("insertUnorderedList"); return; }  // off
     if (!list || list.tagName === "OL") document.execCommand("insertUnorderedList");
@@ -844,6 +867,28 @@ function applyList(kind) {
     if (now) now.classList.add("checklist");
   } else if (kind === "ul" && list && list.classList.contains("checklist")) list.classList.remove("checklist");
   else document.execCommand(kind === "ol" ? "insertOrderedList" : "insertUnorderedList");
+  // A new list right below or above another one gets joined to it: keep bullets and checklists apart
+  if (!list) for (const l of [...ed.querySelectorAll("ul")]) splitByKind(l, was, kind);
+}
+function splitByKind(list, was, fresh) {
+  const items = [...list.children];
+  const kinds = items.map((li) => was.get(li) || fresh);
+  if (new Set(kinds).size < 2) { if (kinds.length) list.classList.toggle("checklist", kinds[0] === "check"); return; }
+  const sel = getSelection(), r = sel.rangeCount ? sel.getRangeAt(0) : null;
+  const caret = r && [r.startContainer, r.startOffset];
+  let anchor = list, cur = null, curKind = null;
+  items.forEach((li, i) => {
+    if (kinds[i] !== curKind) {
+      cur = document.createElement("ul");
+      if (kinds[i] === "check") cur.className = "checklist";
+      anchor.after(cur);
+      anchor = cur;
+      curKind = kinds[i];
+    }
+    cur.append(li);
+  });
+  list.remove();
+  if (caret) { const nr = document.createRange(); nr.setStart(...caret); nr.collapse(true); sel.removeAllRanges(); sel.addRange(nr); }
 }
 function applyBlock(tag) {
   const { block, list } = editorBlock();
@@ -857,7 +902,8 @@ function updateToolbar() {
   const tag = block ? block.tagName : "";
   for (const b of $("note-tools").querySelectorAll("button")) {
     let on = false;
-    if (b.dataset.cmd) { try { on = document.queryCommandState(b.dataset.cmd); } catch { } }
+    if (b.dataset.cmd === "hilite") on = isHighlighted();
+    else if (b.dataset.cmd) { try { on = document.queryCommandState(b.dataset.cmd); } catch { } }
     else if (b.dataset.block === "div") on = !list && /^(DIV|P|)$/.test(tag);
     else if (b.dataset.block) on = tag === b.dataset.block.toUpperCase();
     else if (b.dataset.list) {
@@ -876,17 +922,23 @@ function autoList(e) {
   const parent = node.parentNode;
   if (!m || parent === ed || !ed.contains(parent) || !/^(DIV|P)$/.test(parent.tagName) || parent.closest("ul, ol")) return;
   if (node.nextSibling && !(node.nextSibling.tagName === "BR" && !node.nextSibling.nextSibling)) return;
-  const list = document.createElement(m[2] ? "ol" : "ul");
-  if (m[3]) list.className = "checklist";
-  const li = document.createElement("li");
-  li.innerHTML = "<br>";
-  list.append(li);
-  parent.replaceWith(list);
+  // through the editing commands, so that Undo takes it back step by step
   const r = document.createRange();
-  r.setStart(li, 0);
-  r.collapse(true);
+  r.selectNodeContents(node);
   sel.removeAllRanges();
   sel.addRange(r);
+  document.execCommand("delete");
+  applyList(m[1] ? "ul" : m[2] ? "ol" : "check");
+}
+function isHighlighted() {
+  try { return /255,\s*204,\s*0/.test(document.queryCommandValue("hiliteColor") + document.queryCommandValue("backColor")); }
+  catch { return false; }
+}
+function toggleHighlight() {
+  const on = isHighlighted();
+  document.execCommand("styleWithCSS", false, true);
+  document.execCommand("hiliteColor", false, on ? "transparent" : HIGHLIGHT);
+  document.execCommand("styleWithCSS", false, false);
 }
 function initNoteEditor() {
   const ed = $("note-editor");
@@ -905,7 +957,8 @@ function initNoteEditor() {
     b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the cursor (and keyboard) in the note
     b.onclick = () => {
       if (!ed.contains(getSelection().anchorNode)) placeCaretAtEnd(ed);
-      if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
+      if (b.dataset.cmd === "hilite") toggleHighlight();
+      else if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
       else if (b.dataset.block) applyBlock(b.dataset.block);
       else applyList(b.dataset.list);
       noteChanged();
@@ -923,6 +976,8 @@ function editListNote(it) {
   openNoteEditor({
     target: it, title: free ? "Note" : itemLabel(it), html, passage: free ? null : it, focus: !html,
     save: (h) => { if (free) it.text = h; else it.note = h; saveLists(); },
+    trash: (h) => trashPut(free ? { type: "item", listId: list.id, listName: list.name, item: { kind: "note", text: h } }
+                                : { type: "note", listId: list.id, listName: list.name, label: itemLabel(it), html: h }),
     remove: () => {
       if (!free) delete it.note;
       else if (list.items.includes(it)) list.items.splice(list.items.indexOf(it), 1);
@@ -936,6 +991,184 @@ function addFreeNote() {
   saveLists(); renderList();
   $("list-items").scrollTop = $("list-items").scrollHeight;
   editListNote(it);
+}
+
+// ---------------------------------------------------------------- keeping lists and notes safe
+/* Everything is saved on this device straight away (a note after every letter). What can still go
+   wrong: deleting something by mistake (Recently deleted, 30 days), and Safari clearing the data of
+   a website that is not on the Home Screen (a backup file, and the advice to add it there). */
+const TRASH_DAYS = 30;
+const trashGet = () => store.get("trash", []).filter((x) => Date.now() - x.t < TRASH_DAYS * 864e5);
+function trashPut(entry) {
+  store.set("trash", [{ t: Date.now(), ...JSON.parse(JSON.stringify(entry)) }, ...trashGet()].slice(0, 300));
+}
+function trashLabel(x) {
+  if (x.type === "list") return [`List “${x.list.name || "unnamed"}”`, countText(x.list.items) + (x.why ? ` · ${x.why}` : "")];
+  if (x.type === "note") return [`Note on ${x.label}`, noteText(x.html)];
+  const it = x.item;
+  return [isNote(it) ? "Note" : itemLabel(it), noteText(isNote(it) ? it.text : it.note)];
+}
+function restoreTrash(x) {
+  if (x.type === "list") {
+    const taken = state.lists.some((l) => l.id === x.list.id);
+    const list = { ...x.list, id: taken ? newList().id : x.list.id, name: taken ? `${x.list.name || "List"} (restored)` : x.list.name };
+    state.lists.push(list);
+    state.current = list.id;
+  } else {
+    const list = state.lists.find((l) => l.id === x.listId) || currentList();
+    state.current = list.id;
+    if (x.type === "note") {  // back on its passage, or as a note of its own if the passage has another note now
+      const p = list.items.find((it) => !isNote(it) && itemLabel(it) === x.label && !it.note);
+      if (p) p.note = x.html;
+      else list.items.push({ kind: "note", text: `<h3>${esc(x.label)}</h3>${noteHtml(x.html)}` });
+    } else list.items.splice(x.index ?? list.items.length, 0, x.item);  // where it was, if it can
+  }
+  store.set("trash", trashGet().filter((y) => y.t !== x.t));
+  saveLists(); renderList();
+}
+function ago(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago`
+    : `${Math.round(m / 1440)} day${Math.round(m / 1440) === 1 ? "" : "s"} ago`;
+}
+function showTrash() {
+  const items = trashGet();
+  showDialog(`<h2>Recently deleted</h2>
+    <p>Deleted notes, passages with a note, and lists stay here for ${TRASH_DAYS} days.</p>
+    <ul class="trash" id="trash"></ul>
+    <div class="buttons"><button id="t-close" class="primary">Close</button></div>`, (d) => {
+    d.classList.add("wide");
+    const ul = d.querySelector("#trash");
+    if (!items.length) ul.append(el("li", "info", "Nothing was deleted recently."));
+    for (const x of items) {
+      const [title, sub] = trashLabel(x);
+      const li = el("li"), body = el("div", "body");
+      body.append(el("div", "label", title), el("div", "snip", sub), el("div", "when", `Deleted ${ago(x.t)}`));
+      const b = el("button", "ghost small", "Restore");
+      b.onclick = () => { restoreTrash(x); li.remove(); toast(`Restored: ${title}`); };
+      li.append(body, b);
+      ul.append(li);
+    }
+    d.querySelector("#t-close").onclick = closeDialog;
+  });
+}
+
+/** All lists with their notes in one file, to keep in Files, iCloud Drive, mail… */
+async function backupLists() {
+  const date = new Date().toISOString().slice(0, 10);
+  const data = { app: "bible-present-mobile", saved: new Date().toISOString(), lists: state.lists };
+  const file = new File([JSON.stringify(data, null, 1)], `Bible Present backup ${date}.json`, { type: "application/json" });
+  if (await sendFile(file, "Bible Present backup")) store.set("lastBackup", Date.now());
+}
+/** Lists from a backup file are added; a list that is here already is never overwritten. */
+function restoreBackup() {
+  const input = el("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { return toast("That file is not a backup."); }
+    if (!data || !Array.isArray(data.lists)) return toast("That file is not a Bible Present Mobile backup.");
+    const valid = (it) => it && (it.kind === "note" || (it.kind === "sermon" && it.code) || Number.isInteger(it.b));
+    let added = 0, same = 0;
+    for (const l of data.lists) {
+      if (!l || !Array.isArray(l.items)) continue;
+      const items = l.items.filter(valid);
+      const mine = state.lists.find((x) => x.id === l.id);
+      if (mine && mine.name === l.name && JSON.stringify(mine.items) === JSON.stringify(items)) { same++; continue; }
+      state.lists.push({ id: mine || !l.id ? newList().id : String(l.id),
+                         name: mine ? `${l.name || "List"} (from backup)` : String(l.name || ""), items });
+      added++;
+    }
+    saveLists(); renderList(); closeDialog();
+    toast(added ? `Added ${added} list${added === 1 ? "" : "s"} from the backup` + (same ? `; ${same} already here` : "")
+                : "Everything in this backup is here already.");
+  };
+  input.click();
+}
+const installed = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+
+function showMenu() {
+  const last = store.get("lastBackup", 0), n = trashGet().length;
+  showDialog(`<h2>Lists and notes</h2>
+    <p>Everything is saved on this device straight away, a note after every letter you type.</p>
+    ${installed() ? "" : `<p class="warn">Add Bible Present to the Home Screen (Share <b>⎙</b> → <b>Add to Home Screen</b>).
+      Safari may clear the data of a website you have not opened for a while; an app on the Home Screen is kept.</p>`}
+    <div class="menu">
+      <button id="m-trash">Recently deleted${n ? ` (${n})` : ""}</button>
+      <button id="m-backup">Back up all lists and notes</button>
+      <button id="m-restore">Restore from a backup…</button>
+      <button id="m-help">Help</button>
+    </div>
+    <p class="hint">Last backup: ${last ? ago(last) : "never"}. Save it in Files or iCloud Drive.</p>
+    <div class="buttons"><button id="m-close" class="primary">Close</button></div>`, (d) => {
+    d.querySelector("#m-trash").onclick = showTrash;
+    d.querySelector("#m-backup").onclick = () => { closeDialog(); backupLists(); };
+    d.querySelector("#m-restore").onclick = restoreBackup;
+    d.querySelector("#m-help").onclick = showHelp;
+    d.querySelector("#m-close").onclick = closeDialog;
+  });
+}
+
+// ---------------------------------------------------------------- help
+const HELP = [
+  ["Getting started", `
+    <p>Bible Present Mobile prepares lists of Bible passages and sermon quotes for Bible Present on the laptop.
+       It works without internet, except for searching and loading sermons.</p>
+    <p><b>Add it to the Home Screen</b> (Safari: Share → Add to Home Screen). It then opens as an app, works offline,
+       and Safari keeps your lists and notes.</p>`],
+  ["Finding Bible verses", `
+    <ul><li>Choose a book, a chapter and a verse. Tap a second verse to select the verses in between; tap the selected verse again to clear it.</li>
+    <li>Or type in <b>Go to…</b>: <code>joh 3:16-18</code>, <code>ps 23</code>, <code>1 kor 13</code>. Dutch, English and French book names work.</li>
+    <li>The box next to it switches the Bible (SV, KJV, LSG).</li></ul>`],
+  ["Sermon quotes", `
+    <ul><li><b>Find sermon</b>: a code (<code>56-0401M</code>), words from the title or the place. The year box shows one year.</li>
+    <li><b>Search the text</b> of all sermons and tap a result to open the sermon at that paragraph. The words are marked.</li>
+    <li><b>Find in this sermon</b>: words or a paragraph number (<code>14</code>).</li>
+    <li>NL / EN above the paragraphs switches the language. Tap paragraphs to select them, like verses.</li></ul>`],
+  ["Making a list", `
+    <ul><li>Select verses or paragraphs and tap <b>＋ Add to list</b>. Typing several in Go to… adds them all: <code>joh 3:16; ps 23:1-4; 56-0401M 12</code>.</li>
+    <li>Drag <b>⠿</b> to change the order, <b>✕</b> removes. Tap an item to see it on the left.</li>
+    <li>The list box at the top switches between lists; <b>New list</b> starts one.</li></ul>`],
+  ["Notes", `
+    <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
+    <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
+    <li>A note opens on the left. Tap another note in the list to switch; <b>Done</b> closes it. An empty note is removed.</li>
+    <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker; bullets, numbers and a checklist (tap the circle to tick it off).</li>
+    <li>Quicker: start a line with <code>- </code> for bullets, <code>1. </code> for numbers or <code>[] </code> for a checklist. Return on an empty line ends the list.</li>
+    <li><b>Undo</b>: ↶ and ↷ in the toolbar, the undo key above the keyboard, or swipe left with three fingers (right to redo).</li></ul>`],
+  ["Outline and printing", `
+    <p><b>Outline</b> shows the whole list as you will go through it: your notes, the references and the full texts.
+       <b>Share</b> sends it as text, <b>Print</b> prints it (or makes a PDF via the print options).</p>`],
+  ["Getting the list to the laptop", `
+    <ul><li><b>Connect to laptop</b> (same Wi-Fi): on the laptop, Bible Present → <b>iPad</b> → switch it on, then enter the address and the 4-digit code.
+       Your list goes along, and the iPad becomes the presenting console: tap an item to put it on the screen, Next/Previous, Blank, languages.</li>
+    <li>Your notes stay on the iPad: the console shows them in their places in the service list, only for you.</li>
+    <li><b>Back to my lists</b> brings the list back, with the changes and your notes.</li>
+    <li>Without Wi-Fi: <b>Send as file</b> (AirDrop, mail) and open it on the laptop with Service list ⋯ → Open list, or <b>Share as text</b> and Paste list.</li></ul>`],
+  ["Keeping your notes safe", `
+    <ul><li>Everything is saved straight away, a note after every letter you type.</li>
+    <li>Deleted notes, passages with a note and lists go to <b>⋯ → Recently deleted</b> for 30 days.</li>
+    <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup</b> adds the lists from such a file again (nothing is overwritten).</li>
+    <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li></ul>`],
+];
+function showHelp() {
+  showDialog(`<h2>Help</h2><div class="help" id="help"></div>
+    <div class="buttons"><button id="h-close" class="primary">Close</button></div>`, (d) => {
+    d.classList.add("wide");
+    const box = d.querySelector("#help");
+    for (const [title, html] of HELP) {
+      const sec = el("details");
+      const sum = el("summary", "", title);
+      const body = el("div", "help-body");
+      body.innerHTML = html;
+      sec.append(sum, body);
+      box.append(sec);
+    }
+    d.querySelector("#h-close").onclick = closeDialog;
+  });
 }
 /** Drag an item by its grip. The item lifts and follows the finger (it is only moved visually,
     so iPadOS keeps tracking the finger); the other items glide out of the way; on release it
@@ -1031,17 +1264,21 @@ function listAsFile(list) {
 async function shareFile() {
   const list = currentList();
   if (!passages(list.items).length) return toast("The list has no passages.");
-  const file = listAsFile(list);
+  await sendFile(listAsFile(list), list.name || "Bible Present list");
+}
+/** The share sheet (AirDrop, Files, mail…), or a download. False when cancelled. */
+async function sendFile(file, title) {
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: list.name || "Bible Present list" });
-      return;
+      await navigator.share({ files: [file], title });
+      return true;
     }
-  } catch (e) { if (e.name === "AbortError") return; }
+  } catch (e) { if (e.name === "AbortError") return false; }
   const a = el("a"); // fallback: download the file
   a.href = URL.createObjectURL(file); a.download = file.name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
 }
 async function shareText() {
   const list = currentList();
@@ -1567,6 +1804,7 @@ function handleReturn() {
   try { data = b64dec(h.get("return")); } catch { return; }
   let list = state.lists.find((l) => l.id === data.id);
   if (!list) { list = newList(data.name || "From the laptop"); state.lists.push(list); }
+  if (list.items.some((it) => isNote(it) || it.note)) trashPut({ type: "list", list, why: "the version before the laptop" });
   // a console of a laptop up to 1.5.1 sends the passages only: put this list's notes back in between
   list.items = data.woven ? (data.items || []).map(fromPlan) : wovenItems(data.items || [], list.items);
   state.current = list.id;
@@ -1634,12 +1872,15 @@ async function init() {
     const l = currentList();
     if (l.items.length && !confirm(`Delete “${l.name || "this list"}” (${countText(l.items)})?`)) return;
     closeNoteEditor();
+    if (l.items.length) trashPut({ type: "list", list: l });
     state.lists = state.lists.filter((x) => x.id !== l.id);
     if (!state.lists.length) state.lists.push(newList());
     state.current = state.lists[0].id;
     saveLists(); renderList();
   };
   $("list-note").onclick = addFreeNote;
+  $("list-menu").onclick = showMenu;
+  $("help-btn").onclick = showHelp;
   $("list-outline").onclick = showOutline;
   $("share-file").onclick = shareFile;
   $("share-text").onclick = shareText;
