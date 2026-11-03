@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.10">
+<link rel="stylesheet" href="style.css?v=1.11">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -123,8 +123,16 @@
         <button data-list="ul" aria-label="Bulleted list">• ≡</button>
         <button data-list="ol" aria-label="Numbered list">1. ≡</button>
         <button data-list="check" aria-label="Checklist">◯ ≡</button>
+        <span class="marker-colors hidden" id="marker-colors">
+          <button data-marker="yellow" class="swatch m-yellow" aria-label="Yellow marker"></button>
+          <button data-marker="green" class="swatch m-green" aria-label="Green marker"></button>
+          <button data-marker="blue" class="swatch m-blue" aria-label="Blue marker"></button>
+          <button data-marker="pink" class="swatch m-pink" aria-label="Pink marker"></button>
+          <button data-marker="orange" class="swatch m-orange" aria-label="Orange marker"></button>
+          <button data-marker="none" class="swatch m-none" aria-label="No marker">✕</button>
+        </span>
       </div>
-      <div class="note-editor note-doc" id="note-editor" contenteditable="true" spellcheck="true"></div>
+      <div class="note-body" id="note-body"></div>
     </div>
 
     <div class="addbar hidden" id="addbar">
@@ -146,7 +154,8 @@
     </div>
     <input id="list-name" class="list-name prep-only" type="text" placeholder="Name of this list (e.g. Sunday 19 October)">
     <!-- connected to the laptop -->
-    <div class="col-title conn-only"><span>SERVICE LIST · LAPTOP</span><span id="remote-count"></span></div>
+    <div class="col-title conn-only"><span>SERVICE LIST · LAPTOP</span>
+      <span><button id="remote-notes" class="ghost small">All notes</button> <span id="remote-count"></span></span></div>
 
     <ul id="list-items" class="scroll"></ul>
     <div class="list-empty" id="list-empty">
@@ -156,6 +165,7 @@
     <div class="prep-only">
       <div class="list-tools">
         <button id="list-note" class="ghost">＋ Note</button>
+        <button id="list-all-notes" class="ghost">All notes</button>
         <button id="list-outline" class="ghost">Outline</button>
       </div>
       <button id="connect-btn" class="connect">Connect to laptop</button>
@@ -185,6 +195,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.10"></script>
+<script src="app.js?v=1.11"></script>
 </body>
 </html>

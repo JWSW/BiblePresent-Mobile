@@ -660,6 +660,7 @@ function renderList() {
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, (from, to) => {
       list.items.splice(to, 0, list.items.splice(from, 1)[0]);
       saveLists();
+      if (noteSession && noteSession.all) setTimeout(openAllNotes, 200);  // the document follows the list
     }));
     const body = el("div", "body");
     const buttons = [];
@@ -681,6 +682,7 @@ function renderList() {
       if (noteSession && noteSession.target === it) { noteSession = null; $("note-pane").classList.add("hidden"); }
       if (noteText(isNote(it) ? it.text : it.note)) trashPut({ type: "item", listId: list.id, listName: list.name, item: it, index: i });
       list.items.splice(i, 1); saveLists(); renderList();
+      if (noteSession && noteSession.all) openAllNotes();  // the document follows the list
     };
     li.append(grip, el("span", "num", isNote(it) ? "" : ++num), body, ...buttons, del);
     ul.appendChild(li);
@@ -700,16 +702,26 @@ function noteLine(html, onEdit) {
 /* A note is HTML with a few kinds of formatting (titles, bold…, lists, checklists). Notes written
    before formatting existed are plain text. */
 const NOTE_TAGS = new Set(["DIV", "P", "BR", "B", "STRONG", "I", "EM", "U", "S", "STRIKE", "MARK", "UL", "OL", "LI", "H1", "H2", "H3"]);
-/* The marker: in the editor a coloured background (so Safari can switch it off again), saved as <mark>. */
-const HIGHLIGHT = "rgba(255, 204, 0, 0.45)";
-const isMarker = (c) => c.tagName === "SPAN" && /255,\s*204,\s*0/.test(c.style.backgroundColor || "");
+/* The marker, in colours as in Apple Notes: in the editor a coloured background (so Safari can switch
+   it off again), saved as <mark> (yellow) or <mark class="m-green"> etc. */
+const MARKERS = { yellow: [255, 204, 0, 0.45], green: [52, 199, 89, 0.38], blue: [10, 132, 255, 0.32],
+                  pink: [255, 45, 145, 0.3], orange: [255, 149, 0, 0.42] };
+const markerCss = (name, alpha) => { const [r, g, b, a] = MARKERS[name]; return `rgba(${r}, ${g}, ${b}, ${alpha ?? a})`; };
+function markerName(color) {
+  const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(color || "");
+  if (!m) return null;
+  const hit = Object.entries(MARKERS).find(([, [r, g, b]]) => +m[1] === r && +m[2] === g && +m[3] === b);
+  return hit ? hit[0] : null;
+}
+const isMarker = (c) => c.tagName === "SPAN" && !!markerName(c.style.backgroundColor);
 /** A saved note made ready for the editor: <mark> becomes the coloured background again. */
 function editableNote(html) {
   const t = document.createElement("template");
   t.innerHTML = cleanNote(noteHtml(html));
   for (const m of t.content.querySelectorAll("mark")) {
     const s = document.createElement("span");
-    s.style.backgroundColor = HIGHLIGHT;
+    const name = (m.className.match(/\bm-(\w+)/) || [])[1];
+    s.style.backgroundColor = markerCss(MARKERS[name] ? name : "yellow");
     s.append(...m.childNodes);
     m.replaceWith(s);
   }
@@ -726,13 +738,19 @@ function cleanNote(html) {
       if (c.nodeType === 3) continue;
       if (c.nodeType !== 1 || /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|TEMPLATE|SVG|MATH)$/i.test(c.tagName)) { c.remove(); continue; }
       walk(c);
-      if (isMarker(c)) { const m = document.createElement("mark"); m.append(...c.childNodes); c.replaceWith(m); continue; }
+      if (isMarker(c)) {
+        const m = document.createElement("mark"), name = markerName(c.style.backgroundColor);
+        if (name !== "yellow") m.className = `m-${name}`;
+        m.append(...c.childNodes);
+        c.replaceWith(m);
+        continue;
+      }
       if (!NOTE_TAGS.has(c.tagName)) { c.replaceWith(...c.childNodes); continue; }
       for (const a of [...c.attributes]) {
         if (a.name !== "class") c.removeAttribute(a.name);
       }
       if (c.hasAttribute("class")) {
-        const keep = [...c.classList].filter((x) => x === "checklist" || x === "checked");
+        const keep = [...c.classList].filter((x) => x === "checklist" || x === "checked" || (c.tagName === "MARK" && MARKERS[x.slice(2)]));
         if (keep.length) c.className = keep.join(" "); else c.removeAttribute("class");
       }
     }
@@ -771,48 +789,80 @@ function noteText(s) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-/** The note that is open in the editor on the left: {target, title, html, passage, save, remove}. */
+/* What is open on the left: one note, or all notes of the list as one document (noteSession.all).
+   A note: {target, title, html, passage, heading, sub, save, remove, trash}; every editor element
+   on the left carries its own note as ._note. */
 let noteSession = null;
 let noteRender = 0;
+let lastEditor = null;
+function makeEditor(n) {
+  const ed = el("div", "note-editor note-doc");
+  ed.contentEditable = "true";
+  ed.spellcheck = true;
+  ed.innerHTML = editableNote(n.html) || "<div><br></div>";
+  ed._note = n;
+  markEmpty(ed);
+  return ed;
+}
+const markEmpty = (ed) => ed.classList.toggle("empty", !noteText(ed.innerHTML));
 function openNoteEditor(s) {
+  const back = noteSession ? noteSession.backMode : $("layout").dataset.mode;
   closeNoteEditor(true);
   noteSession = s;
-  s.backMode = $("layout").dataset.mode;
+  s.backMode = back;
   $("note-title").textContent = s.title;
-  const ed = $("note-editor");
-  ed.innerHTML = editableNote(s.html) || "<div><br></div>";
-  showNotePassage(s);
+  $("note-delete").classList.toggle("hidden", !!s.all);
+  const body = $("note-body");
+  body.innerHTML = "";
+  body.classList.toggle("all", !!s.all);
+  if (s.all) {
+    for (const n of s.sessions) {
+      const ed = n.save ? makeEditor(n) : null;
+      if (n.heading) {
+        const h = el("div", "all-ref");
+        h.append(el("span", "ref", n.heading), el("span", "sub", n.sub || ""));
+        if (ed) h.onclick = () => placeCaretAtEnd(ed);
+        body.append(h);
+      }
+      if (ed && !n.heading) ed.classList.add("free");  // a note of its own, not under a passage
+      if (ed) body.append(ed);
+    }
+  } else body.append(makeEditor(s));
+  showNotePassage(s.all ? {} : s);
   $("note-pane").classList.remove("hidden");
   setMode("browse");  // phones: the editor is on the left side
-  ed.scrollTop = 0;
-  if (s.focus) placeCaretAtEnd(ed);
+  body.scrollTop = 0;
+  if (s.focus) placeCaretAtEnd(body.querySelector(".note-editor"));
   renderList();       // marks the note that is open
 }
-/** Done (or another note opened): an empty note is removed. */
+/** Done (or another note opened): empty notes are removed. */
 function closeNoteEditor(switching) {
   const s = noteSession;
   if (!s) return;
   noteSession = null;
-  if (!noteText($("note-editor").innerHTML)) s.remove();
+  for (const ed of $("note-body").querySelectorAll(".note-editor")) if (!noteText(ed.innerHTML)) ed._note.remove();
   $("note-pane").classList.add("hidden");
-  $("note-editor").blur();
+  if (document.activeElement) document.activeElement.blur();
+  $("note-body").innerHTML = "";
+  lastEditor = null;
   if (!switching) { setMode(s.backMode || "browse"); renderList(); }
 }
 function deleteOpenNote() {
-  const s = noteSession;
-  if (!s) return;
-  const html = cleanNote($("note-editor").innerHTML);
+  const s = noteSession, ed = $("note-body").querySelector(".note-editor");
+  if (!s || s.all || !ed) return;
+  const html = cleanNote(ed.innerHTML);
   if (noteText(html)) {
     if (!confirm("Delete this note? You can get it back from ⋯ → Recently deleted.")) return;
     if (s.trash) s.trash(html);
   }
   s.remove();
-  $("note-editor").innerHTML = "";
+  ed.innerHTML = "";
   closeNoteEditor();
 }
-function noteChanged() {
-  if (!noteSession) return;
-  noteSession.save(cleanNote($("note-editor").innerHTML));
+function noteChanged(ed) {
+  if (!noteSession || !ed || !ed._note) return;
+  ed._note.save(cleanNote(ed.innerHTML));
+  markEmpty(ed);
   clearTimeout(noteRender);
   noteRender = setTimeout(renderList, 400);  // the preview in the list
 }
@@ -833,6 +883,7 @@ function showNotePassage(s) {
   if (!passageParas(it)) loadSermonParas(it).then(() => { if (noteSession === s) fill(); });
 }
 function placeCaretAtEnd(ed) {
+  if (!ed) return;
   ed.focus();
   const r = document.createRange();
   r.selectNodeContents(ed);
@@ -843,22 +894,24 @@ function placeCaretAtEnd(ed) {
 }
 
 // the toolbar
+/** Where the cursor is: its editor, block (paragraph, heading, list item) and list. */
 function editorBlock() {
-  const sel = getSelection(), ed = $("note-editor");
+  const sel = getSelection();
   let n = sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
   const found = {};
-  while (n && n !== ed) {
+  while (n && !(n.nodeType === 1 && n.classList.contains("note-editor"))) {
     if (n.nodeType === 1) {
       if (!found.block && /^(DIV|P|H1|H2|H3|LI)$/.test(n.tagName)) found.block = n;
       if (!found.list && /^(UL|OL)$/.test(n.tagName)) found.list = n;
     }
     n = n.parentNode;
   }
-  return n === ed ? found : {};
+  return n ? { ...found, ed: n } : {};
 }
 const listKind = (list) => (list.tagName === "OL" ? "ol" : list.classList.contains("checklist") ? "check" : "ul");
 function applyList(kind) {
-  const ed = $("note-editor"), { list } = editorBlock();
+  const { list, ed } = editorBlock();
+  if (!ed) return;
   const was = new Map([...ed.querySelectorAll("li")].map((li) => [li, listKind(li.parentElement)]));
   if (kind === "check") {
     if (list && list.classList.contains("checklist")) { document.execCommand("insertUnorderedList"); return; }  // off
@@ -900,9 +953,11 @@ function updateToolbar() {
   if (!noteSession) return;
   const { block, list } = editorBlock();
   const tag = block ? block.tagName : "";
+  const marker = currentMarker();
   for (const b of $("note-tools").querySelectorAll("button")) {
     let on = false;
-    if (b.dataset.cmd === "hilite") on = isHighlighted();
+    if (b.dataset.cmd === "hilite") on = !!marker;
+    else if (b.dataset.marker) on = b.dataset.marker === (marker || "none");
     else if (b.dataset.cmd) { try { on = document.queryCommandState(b.dataset.cmd); } catch { } }
     else if (b.dataset.block === "div") on = !list && /^(DIV|P|)$/.test(tag);
     else if (b.dataset.block) on = tag === b.dataset.block.toUpperCase();
@@ -916,8 +971,8 @@ function updateToolbar() {
 /** "- " or "* " starts a bullet list, "1. " a numbered list and "[] " a checklist, as in Notes. */
 function autoList(e) {
   if (e.inputType !== "insertText" || e.data !== " ") return;
-  const sel = getSelection(), node = sel.anchorNode, ed = $("note-editor");
-  if (!node || node.nodeType !== 3 || node.previousSibling) return;
+  const sel = getSelection(), node = sel.anchorNode, { ed } = editorBlock();
+  if (!ed || !node || node.nodeType !== 3 || node.previousSibling) return;
   const m = node.data.replace(/ /g, " ").match(/^(?:([-*•])|(1[.)])|(\[\]))\s$/);
   const parent = node.parentNode;
   if (!m || parent === ed || !ed.contains(parent) || !/^(DIV|P)$/.test(parent.tagName) || parent.closest("ul, ol")) return;
@@ -930,38 +985,49 @@ function autoList(e) {
   document.execCommand("delete");
   applyList(m[1] ? "ul" : m[2] ? "ol" : "check");
 }
-function isHighlighted() {
-  try { return /255,\s*204,\s*0/.test(document.queryCommandValue("hiliteColor") + document.queryCommandValue("backColor")); }
-  catch { return false; }
+/** The marker colour under the cursor (or null). */
+function currentMarker() {
+  try { return markerName(document.queryCommandValue("hiliteColor")) || markerName(document.queryCommandValue("backColor")); }
+  catch { return null; }
 }
-function toggleHighlight() {
-  const on = isHighlighted();
+function applyMarker(name) {
   document.execCommand("styleWithCSS", false, true);
-  document.execCommand("hiliteColor", false, on ? "transparent" : HIGHLIGHT);
+  document.execCommand("hiliteColor", false, name === "none" ? "transparent" : markerCss(name));
   document.execCommand("styleWithCSS", false, false);
+  if (name !== "none") { store.set("marker", name); paintMarkerButton(); }
+}
+function paintMarkerButton() {
+  document.querySelector(".marker-icon").style.background = markerCss(store.get("marker", "yellow"), 0.8);
 }
 function initNoteEditor() {
-  const ed = $("note-editor");
+  const body = $("note-body");
   try { document.execCommand("defaultParagraphSeparator", false, "div"); document.execCommand("styleWithCSS", false, false); } catch { }
-  ed.addEventListener("input", (e) => { autoList(e); noteChanged(); updateToolbar(); });
-  ed.addEventListener("paste", (e) => {  // pasted text comes in as text (no fonts or colours from elsewhere)
+  body.addEventListener("input", (e) => { autoList(e); noteChanged(e.target.closest(".note-editor")); updateToolbar(); });
+  body.addEventListener("focusin", (e) => { if (e.target.classList.contains("note-editor")) lastEditor = e.target; });
+  body.addEventListener("paste", (e) => {  // pasted text comes in as text (no fonts or colours from elsewhere)
     e.preventDefault();
     document.execCommand("insertText", false, (e.clipboardData || window.clipboardData).getData("text/plain"));
   });
-  ed.addEventListener("click", (e) => {  // tap the circle of a checklist item: done / not done
+  body.addEventListener("click", (e) => {  // tap the circle of a checklist item: done / not done
     const li = e.target.closest && e.target.closest("ul.checklist > li");
-    if (li && e.clientX - li.getBoundingClientRect().left < 30) { li.classList.toggle("checked"); noteChanged(); }
+    if (li && e.clientX - li.getBoundingClientRect().left < 30) { li.classList.toggle("checked"); noteChanged(li.closest(".note-editor")); }
   });
   document.addEventListener("selectionchange", updateToolbar);
+  paintMarkerButton();
   for (const b of $("note-tools").querySelectorAll("button")) {
     b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the cursor (and keyboard) in the note
     b.onclick = () => {
-      if (!ed.contains(getSelection().anchorNode)) placeCaretAtEnd(ed);
-      if (b.dataset.cmd === "hilite") toggleHighlight();
+      if (b.dataset.cmd === "hilite") {  // the colours to choose from
+        $("marker-colors").classList.toggle("hidden");
+        return;
+      }
+      let { ed } = editorBlock();
+      if (!ed) { ed = (lastEditor && body.contains(lastEditor)) ? lastEditor : body.querySelector(".note-editor"); placeCaretAtEnd(ed); }
+      if (b.dataset.marker) { applyMarker(b.dataset.marker); $("marker-colors").classList.add("hidden"); }
       else if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
       else if (b.dataset.block) applyBlock(b.dataset.block);
       else applyList(b.dataset.list);
-      noteChanged();
+      noteChanged(editorBlock().ed || ed);
       updateToolbar();
     };
   }
@@ -969,12 +1035,12 @@ function initNoteEditor() {
   $("note-delete").onclick = deleteOpenNote;
 }
 
-/** A free note (kind "note") or the note on a passage of the list being prepared. */
-function editListNote(it) {
-  const list = currentList(), free = isNote(it);
-  const html = free ? it.text : it.note;
-  openNoteEditor({
-    target: it, title: free ? "Note" : itemLabel(it), html, passage: free ? null : it, focus: !html,
+/** The note of an item of the list being prepared: a free note (kind "note") or the note on a passage. */
+function listNote(it, list) {
+  const free = isNote(it);
+  return {
+    target: it, title: free ? "Note" : itemLabel(it), html: free ? it.text : it.note, passage: free ? null : it,
+    heading: free ? null : itemLabel(it), sub: free ? "" : itemSnippet(it),
     save: (h) => { if (free) it.text = h; else it.note = h; saveLists(); },
     trash: (h) => trashPut(free ? { type: "item", listId: list.id, listName: list.name, item: { kind: "note", text: h } }
                                 : { type: "note", listId: list.id, listName: list.name, label: itemLabel(it), html: h }),
@@ -983,7 +1049,18 @@ function editListNote(it) {
       else if (list.items.includes(it)) list.items.splice(list.items.indexOf(it), 1);
       saveLists();
     },
-  });
+  };
+}
+function editListNote(it) {
+  const n = listNote(it, currentList());
+  n.focus = !n.html;
+  openNoteEditor(n);
+}
+/** All notes of the list as one document, in the order of the list; the passages are headings in it. */
+function openAllNotes() {
+  const list = currentList();
+  if (!list.items.length) return toast("The list is empty.");
+  openNoteEditor({ all: true, title: `All notes · ${list.name || "this list"}`, sessions: list.items.map((it) => listNote(it, list)) });
 }
 function addFreeNote() {
   const it = { kind: "note", text: "" };
@@ -1136,7 +1213,8 @@ const HELP = [
     <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
     <li>A note opens on the left. Tap another note in the list to switch; <b>Done</b> closes it. An empty note is removed.</li>
-    <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker; bullets, numbers and a checklist (tap the circle to tick it off).</li>
+    <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).</li>
+    <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it); bullets, numbers and a checklist (tap the circle to tick it off).</li>
     <li>Quicker: start a line with <code>- </code> for bullets, <code>1. </code> for numbers or <code>[] </code> for a checklist. Return on an empty line ends the list.</li>
     <li><b>Undo</b>: ↶ and ↷ in the toolbar, the undo key above the keyboard, or swipe left with three fingers (right to redo).</li></ul>`],
   ["Outline and printing", `
@@ -1640,11 +1718,14 @@ function backToLists() {
 }
 const consolePlan = () => (conn.retList && conn.retList.plan) || [];
 /** Notes in the console: edited here, kept on this iPad until going back to the lists. */
-function editConsoleNote(w) {
+function consoleNote(w) {
+  if (w.item && !w.planned) return { heading: w.item.label, sub: w.item.snippet || "" };  // added on the laptop: no note
   const plan = consolePlan(), free = !w.item && !w.orphan, n = w.item ? w.planned : w.note;
   const keep = () => store.set("returnList", conn.retList);
-  openNoteEditor({
-    target: n, title: free ? "Note" : w.item ? w.item.label : w.orphan, html: free ? n.text : n.note,
+  const label = w.item ? w.item.label : w.orphan;
+  return {
+    target: n, title: free ? "Note" : label, html: free ? n.text : n.note,
+    heading: free ? null : label, sub: w.item ? w.item.snippet || "" : "",
     passage: free ? null : w.item ? fromService(w.item) : n,
     save: (h) => { if (free) n.text = h; else n.note = h; keep(); },
     remove: () => {
@@ -1652,7 +1733,12 @@ function editConsoleNote(w) {
       else if (plan.includes(n)) plan.splice(plan.indexOf(n), 1);
       keep();
     },
-  });
+  };
+}
+const editConsoleNote = (w) => openNoteEditor(consoleNote(w));
+function openAllConsoleNotes() {
+  if (!conn.remote) return;
+  openNoteEditor({ all: true, title: "All notes", sessions: weave(conn.remote.service, consolePlan()).map(consoleNote) });
 }
 
 function renderRemote() {
@@ -1879,6 +1965,8 @@ async function init() {
     saveLists(); renderList();
   };
   $("list-note").onclick = addFreeNote;
+  $("list-all-notes").onclick = openAllNotes;
+  $("remote-notes").onclick = openAllConsoleNotes;
   $("list-menu").onclick = showMenu;
   $("help-btn").onclick = showHelp;
   $("list-outline").onclick = showOutline;
