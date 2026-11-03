@@ -269,6 +269,8 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .help-body { padding: 0 4px 8px; }
 .dialog .help-body p, .help-body li { color: var(--text); margin: 4px 0; }
 .help-body ul { padding-left: 1.3em; margin: 4px 0; }
+.help-anim { display: block; width: 100%; aspect-ratio: 1180 / 820; margin: 8px 0; border-radius: 10px;
+             border: 1px solid var(--border); background: var(--field); }
 .help-body code { background: var(--field); border-radius: 4px; padding: 0 4px; font-size: 14px; }
 .list-tools { display: flex; gap: 8px; margin-top: 10px; }
 .list-tools button { flex: 1; }

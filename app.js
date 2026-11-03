@@ -1208,7 +1208,9 @@ const HELP = [
   ["Making a list", `
     <ul><li>Select verses or paragraphs and tap <b>＋ Add to list</b>. Typing several in Go to… adds them all: <code>joh 3:16; ps 23:1-4; 56-0401M 12</code>.</li>
     <li>Drag <b>⠿</b> to change the order, <b>✕</b> removes. Tap an item to see it on the left.</li>
-    <li>The list box at the top switches between lists; <b>New list</b> starts one.</li></ul>`],
+    <li>The list box at the top switches between lists; <b>New list</b> starts one.</li></ul>
+    <img class="help-anim" data-src="help/add-passage.webp" alt="Selecting John 3:16 to 18 and adding it to the list">
+    <img class="help-anim" data-src="help/reorder.webp" alt="Dragging Psalm 23:4 higher up in the list">`],
   ["Notes", `
     <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
@@ -1216,7 +1218,9 @@ const HELP = [
     <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).</li>
     <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it); bullets, numbers and a checklist (tap the circle to tick it off).</li>
     <li>Quicker: start a line with <code>- </code> for bullets, <code>1. </code> for numbers or <code>[] </code> for a checklist. Return on an empty line ends the list.</li>
-    <li><b>Undo</b>: ↶ and ↷ in the toolbar, the undo key above the keyboard, or swipe left with three fingers (right to redo).</li></ul>`],
+    <li><b>Undo</b>: ↶ and ↷ in the toolbar, the undo key above the keyboard, or swipe left with three fingers (right to redo).</li></ul>
+    <img class="help-anim" data-src="help/note.webp" alt="Writing a note on John 3:16 to 18 with a title, bullets, a checklist and a green marker">
+    <img class="help-anim" data-src="help/all-notes.webp" alt="All notes of the list as one document, and writing under Hebrews 11:1">`],
   ["Outline and printing", `
     <p><b>Outline</b> shows the whole list as you will go through it: your notes, the references and the full texts.
        <b>Share</b> sends it as text, <b>Print</b> prints it (or makes a PDF via the print options).</p>`],
@@ -1243,6 +1247,9 @@ function showHelp() {
       const body = el("div", "help-body");
       body.innerHTML = html;
       sec.append(sum, body);
+      sec.addEventListener("toggle", () => {  // the animations load only when their part is opened
+        if (sec.open) for (const img of body.querySelectorAll("img[data-src]")) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
+      });
       box.append(sec);
     }
     d.querySelector("#h-close").onclick = closeDialog;
