@@ -1486,10 +1486,15 @@ async function sendFile(file, title) {
       return true;
     }
   } catch (e) { if (e.name === "AbortError") return false; }
-  const a = el("a"); // fallback: download the file
-  a.href = URL.createObjectURL(file); a.download = file.name;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  // No share sheet (or it refused the file). A download started from code does nothing in an app on
+  // the iPad's Home Screen, so offer a link to tap: that opens the file, with Share at the top.
+  const url = URL.createObjectURL(file);
+  showDialog(`<h2>${esc(file.name)}</h2>
+    <p>Tap the file to open it. Then use <b>Share</b> (⎙) to save it in Files, open it in Word or send it.</p>
+    <p><a class="file-link" href="${url}" download="${esc(file.name)}" target="_blank">📄 ${esc(file.name)}</a></p>
+    <div class="buttons"><button id="f-close" class="primary">Close</button></div>`, (d) => {
+    d.querySelector("#f-close").onclick = () => { closeDialog(); URL.revokeObjectURL(url); };
+  });
   return true;
 }
 async function shareText() {
@@ -1539,11 +1544,9 @@ function showOutline() {
     d.querySelector("#o-share").onclick = () =>
       sendText(outlineText(list), list.name || "Outline", "Copied the outline.");
     d.querySelector("#o-word").onclick = () => sendFile(outlineDocx(list), list.name || "Outline");
-    d.querySelector("#o-print").onclick = () => {  // the print screen can also save it as a PDF (Share → Save to Files)
-      document.body.classList.add("printing");
-      window.print();
-      setTimeout(() => document.body.classList.remove("printing"), 500);
-    };
+    // the print screen can also save it as a PDF (Share → Save to Files); what is printed: see @media print
+    d.querySelector("#o-print").onclick = () => window.print();
+    document.body.classList.add("outline-open");
     renderOutline(list);
   });
   // sermon texts that are not here yet (and the other Bible for another language): load them, then show them
@@ -1895,11 +1898,15 @@ const wovenItems = (service, plan) => weave(service, plan).map((w) =>
     : w.orphan ? { kind: "note", text: `<h3>${esc(w.orphan)}</h3>${noteHtml(w.note.note)}` } : { kind: "note", text: w.note.text });
 
 function showDialog(html, onMount) {
+  document.body.classList.remove("outline-open");
   $("dialog").innerHTML = html;
   $("overlay").classList.remove("hidden");
   if (onMount) onMount($("dialog"));
 }
-function closeDialog() { $("overlay").classList.add("hidden"); $("dialog").innerHTML = ""; $("dialog").className = "dialog"; }
+function closeDialog() {
+  $("overlay").classList.add("hidden"); $("dialog").innerHTML = ""; $("dialog").className = "dialog";
+  document.body.classList.remove("outline-open");
+}
 
 /** Is this page served by Bible Present on a laptop? (Then it has an /api/info.) */
 async function detectLaptop() {
