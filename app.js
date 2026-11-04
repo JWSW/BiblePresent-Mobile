@@ -1763,7 +1763,7 @@ function outlineDocx(list) {
     const { label, paras: texts } = exportItem(it);
     paras.push({ style: "Reference", runs: [{ text: label }] });
     if (!withTexts()) { /* the references and notes only */ }
-    else if (texts) for (const [n, t] of texts) paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F" } }, { text: t }] });
+    else if (texts) for (const [n, t] of texts) paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F", font: "Calibri" } }, { text: t }] });
     else if (it.snippet) paras.push({ style: "Passage", runs: [{ text: it.snippet }] });
     if (it.note) paras.push(...noteParas(it.note));
   }
@@ -1783,7 +1783,8 @@ function outlineDocx(list) {
     style("Heading3", "heading 3", '<w:keepNext/><w:spacing w:before="160" w:after="40"/><w:outlineLvl w:val="2"/>', '<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>') +
     style("Reference", "Reference", '<w:keepNext/><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="D5DCE4"/></w:pBdr><w:spacing w:before="280" w:after="80"/>',
           '<w:b/><w:color w:val="324158"/><w:sz w:val="26"/><w:szCs w:val="26"/>') +
-    style("Passage", "Passage", '<w:spacing w:after="60"/><w:ind w:left="284"/>', '<w:color w:val="404B5A"/>') +
+    style("Passage", "Passage", '<w:pBdr><w:left w:val="single" w:sz="8" w:space="8" w:color="D5DCE4"/></w:pBdr><w:spacing w:after="60"/><w:ind w:left="200"/>',
+          '<w:rFonts w:ascii="Georgia" w:hAnsi="Georgia" w:cs="Georgia"/><w:color w:val="404B5A"/>') +
     style("ListItem", "List item", '<w:tabs><w:tab w:val="left" w:pos="567"/></w:tabs><w:ind w:left="567" w:hanging="283"/><w:spacing w:after="40"/>', "") +
     "</w:styles>";
   const files = {

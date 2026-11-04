@@ -359,12 +359,14 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
              color: var(--blue); font-weight: 700; text-decoration: none; word-break: break-word; }
 .backup-row .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .outline { max-height: 62vh; overflow-y: auto; margin-bottom: 12px; padding-right: 4px; }
-.outline .o-item { margin-bottom: 14px; }
-.outline .o-ref { font-weight: 800; color: var(--title); }
-.outline .o-text { margin: 2px 0; white-space: pre-line; }
-.outline .o-text .n { color: var(--coral); font-weight: 700; }
-.outline .o-note { margin: 4px 0 14px; padding: 6px 10px; border-radius: 8px;
-                   background: var(--note-bg); color: var(--note-text); }
+/* The outline: the Bible texts and quotes in a serif font, set off like a quotation; your own notes in the
+   normal font, full width. */
+.outline .o-item { margin-bottom: 16px; }
+.outline .o-ref { font-weight: 800; color: var(--title); margin-top: 4px; }
+.dialog .outline .o-text { margin: 3px 0 3px 2px; padding-left: 12px; border-left: 2px solid var(--border); white-space: pre-line;
+                           font-family: ui-serif, Georgia, "Times New Roman", serif; font-size: 15.5px; color: var(--text); opacity: .85; }
+.outline .o-text .n { color: var(--coral); font-weight: 700; font-family: system-ui, sans-serif; font-size: 12px; }
+.outline .o-note { margin: 8px 0 16px; color: var(--text); }
 .outline .o-item .o-note { margin-bottom: 0; }
 /* Printing (and PDF) while the outline is open: only the outline, always in the light colours.
    The iPad makes its print preview a moment after print() returns, so this must not depend on timing. */
@@ -378,8 +380,10 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
   body.outline-open .dialog { box-shadow: none; width: auto; max-width: none; max-height: none; overflow: visible;
                               padding: 0; background: #fff; color: #1F2B3B; border-radius: 0; }
   body.outline-open .dialog .buttons, body.outline-open .o-options { display: none; }
-  body.outline-open .outline { max-height: none; overflow: visible; }
-  body.outline-open .o-item, body.outline-open .o-note { break-inside: avoid-page; }
+  body.outline-open .dialog, body.outline-open .outline, body.outline-open .o-item { display: block; }
+  body.outline-open .outline { max-height: none; overflow: visible; margin: 0; padding: 0; }
+  body.outline-open .o-ref { break-after: avoid-page; }  /* a reference never alone at the bottom of a page */
+  body.outline-open .dialog .outline .o-text { opacity: 1; color: #404B5A; }
 }
 
 .narrow-pickers { display: none; gap: 8px; margin-bottom: 8px; }
