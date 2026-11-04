@@ -713,15 +713,46 @@ function markerName(color) {
   const hit = Object.entries(MARKERS).find(([, [r, g, b]]) => +m[1] === r && +m[2] === g && +m[3] === b);
   return hit ? hit[0] : null;
 }
-const isMarker = (c) => c.tagName === "SPAN" && !!markerName(c.style.backgroundColor);
-/** A saved note made ready for the editor: <mark> becomes the coloured background again. */
+/* Text colours and fonts, the same way: inline styles in the editor, saved as classes (c-red, f-serif). */
+const TEXT_COLORS = { red: [255, 59, 48], orange: [255, 149, 0], green: [52, 199, 89], blue: [10, 132, 255],
+                      purple: [175, 82, 222], gray: [142, 142, 147] };
+const FONTS = { serif: 'ui-serif, Georgia, "Times New Roman", serif',
+                rounded: 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", sans-serif',
+                mono: 'ui-monospace, Menlo, Consolas, "Courier New", monospace',
+                hand: 'Noteworthy, "Bradley Hand", "Segoe Print", cursive' };
+const FONT_LABELS = { "": "Standard", serif: "Serif", rounded: "Rounded", mono: "Typewriter", hand: "Handwriting" };
+const colorCss = (name) => `rgb(${TEXT_COLORS[name].join(", ")})`;
+function colorName(color) {
+  const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color || "");
+  const m = hex ? [0, ...hex.slice(1).map((h) => parseInt(h, 16))] : /(\d+),\s*(\d+),\s*(\d+)/.exec(color || "");
+  const hit = m && Object.entries(TEXT_COLORS).find(([, [r, g, b]]) => +m[1] === r && +m[2] === g && +m[3] === b);
+  return hit ? hit[0] : null;
+}
+const firstFamily = (f) => String(f || "").split(",")[0].replace(/["']/g, "").trim().toLowerCase();
+function fontKey(family) {
+  const first = firstFamily(family);
+  return (first && Object.keys(FONTS).find((k) => firstFamily(FONTS[k]) === first)) || null;
+}
+const classOf = (c, prefix, known) => {
+  const x = [...c.classList].find((k) => k.startsWith(prefix) && known[k.slice(prefix.length)]);
+  return x ? x.slice(prefix.length) : null;
+};
+/** The marker, text colour and font of an element: from its style (the editor) or its classes (saved). */
+function inlineStyle(c) {
+  let marker = markerName(c.style.backgroundColor) || classOf(c, "m-", MARKERS);
+  if (!marker && c.tagName === "MARK") marker = "yellow";
+  return { marker, color: colorName(c.style.color || c.getAttribute("color")) || classOf(c, "c-", TEXT_COLORS),
+           font: fontKey(c.style.fontFamily || c.getAttribute("face")) || classOf(c, "f-", FONTS) };
+}
+/** A saved note made ready for the editor: <mark> and the coloured spans become inline styles again. */
 function editableNote(html) {
   const t = document.createElement("template");
   t.innerHTML = cleanNote(noteHtml(html));
-  for (const m of t.content.querySelectorAll("mark")) {
-    const s = document.createElement("span");
-    const name = (m.className.match(/\bm-(\w+)/) || [])[1];
-    s.style.backgroundColor = markerCss(MARKERS[name] ? name : "yellow");
+  for (const m of t.content.querySelectorAll("mark, span")) {
+    const s = document.createElement("span"), st = inlineStyle(m);
+    if (st.marker) s.style.backgroundColor = markerCss(st.marker);
+    if (st.color) s.style.color = colorCss(st.color);
+    if (st.font) s.style.fontFamily = FONTS[st.font];
     s.append(...m.childNodes);
     m.replaceWith(s);
   }
@@ -738,9 +769,12 @@ function cleanNote(html) {
       if (c.nodeType === 3) continue;
       if (c.nodeType !== 1 || /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|TEMPLATE|SVG|MATH)$/i.test(c.tagName)) { c.remove(); continue; }
       walk(c);
-      if (isMarker(c)) {
-        const m = document.createElement("mark"), name = markerName(c.style.backgroundColor);
-        if (name !== "yellow") m.className = `m-${name}`;
+      if (/^(SPAN|FONT|MARK)$/.test(c.tagName)) {  // marker, colour, font: <mark class="m-green c-red f-serif">
+        const st = inlineStyle(c);
+        if (!st.marker && !st.color && !st.font) { c.replaceWith(...c.childNodes); continue; }
+        const m = document.createElement(st.marker ? "mark" : "span");
+        const cls = [st.marker && st.marker !== "yellow" && `m-${st.marker}`, st.color && `c-${st.color}`, st.font && `f-${st.font}`];
+        if (cls.some(Boolean)) m.className = cls.filter(Boolean).join(" ");
         m.append(...c.childNodes);
         c.replaceWith(m);
         continue;
@@ -750,7 +784,7 @@ function cleanNote(html) {
         if (a.name !== "class") c.removeAttribute(a.name);
       }
       if (c.hasAttribute("class")) {
-        const keep = [...c.classList].filter((x) => x === "checklist" || x === "checked" || (c.tagName === "MARK" && MARKERS[x.slice(2)]));
+        const keep = [...c.classList].filter((x) => x === "checklist" || x === "checked");
         if (keep.length) c.className = keep.join(" "); else c.removeAttribute("class");
       }
     }
@@ -953,11 +987,14 @@ function updateToolbar() {
   if (!noteSession) return;
   const { block, list } = editorBlock();
   const tag = block ? block.tagName : "";
-  const marker = currentMarker();
+  const marker = currentMarker(), color = currentColor(), font = currentFont();
   for (const b of $("note-tools").querySelectorAll("button")) {
     let on = false;
     if (b.dataset.cmd === "hilite") on = !!marker;
+    else if (b.dataset.cmd === "textstyle") on = !!(color || font);
     else if (b.dataset.marker) on = b.dataset.marker === (marker || "none");
+    else if (b.dataset.color !== undefined) on = b.dataset.color === (color || "");
+    else if (b.dataset.font !== undefined) on = b.dataset.font === (font || "");
     else if (b.dataset.cmd) { try { on = document.queryCommandState(b.dataset.cmd); } catch { } }
     else if (b.dataset.block === "div") on = !list && /^(DIV|P|)$/.test(tag);
     else if (b.dataset.block) on = tag === b.dataset.block.toUpperCase();
@@ -996,6 +1033,20 @@ function applyMarker(name) {
   document.execCommand("styleWithCSS", false, false);
   if (name !== "none") { store.set("marker", name); paintMarkerButton(); }
 }
+function currentColor() {
+  try { return colorName(document.queryCommandValue("foreColor")); } catch { return null; }
+}
+function currentFont() {
+  try { return fontKey(document.queryCommandValue("fontName")); } catch { return null; }
+}
+/** Text colour or font of the selection; "" goes back to the normal one (the editor's own). */
+function applyTextStyle(kind, name, ed) {
+  const own = getComputedStyle(ed);
+  document.execCommand("styleWithCSS", false, true);
+  if (kind === "color") document.execCommand("foreColor", false, name ? colorCss(name) : own.color);
+  else document.execCommand("fontName", false, name ? FONTS[name] : own.fontFamily);
+  document.execCommand("styleWithCSS", false, false);
+}
 function paintMarkerButton() {
   document.querySelector(".marker-icon").style.background = markerCss(store.get("marker", "yellow"), 0.8);
 }
@@ -1017,13 +1068,16 @@ function initNoteEditor() {
   for (const b of $("note-tools").querySelectorAll("button")) {
     b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the cursor (and keyboard) in the note
     b.onclick = () => {
-      if (b.dataset.cmd === "hilite") {  // the colours to choose from
-        $("marker-colors").classList.toggle("hidden");
+      const panel = { hilite: "marker-colors", textstyle: "text-styles" }[b.dataset.cmd];
+      if (panel) {  // the colours (and fonts) to choose from
+        for (const id of ["marker-colors", "text-styles"]) $(id).classList.toggle("hidden", id !== panel || !$(id).classList.contains("hidden"));
         return;
       }
       let { ed } = editorBlock();
       if (!ed) { ed = (lastEditor && body.contains(lastEditor)) ? lastEditor : body.querySelector(".note-editor"); placeCaretAtEnd(ed); }
       if (b.dataset.marker) { applyMarker(b.dataset.marker); $("marker-colors").classList.add("hidden"); }
+      else if (b.dataset.color !== undefined) applyTextStyle("color", b.dataset.color, ed);
+      else if (b.dataset.font !== undefined) applyTextStyle("font", b.dataset.font, ed);
       else if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
       else if (b.dataset.block) applyBlock(b.dataset.block);
       else applyList(b.dataset.list);
@@ -1148,27 +1202,72 @@ function restoreBackup() {
     let data;
     try { data = JSON.parse(await f.text()); } catch { return toast("That file is not a backup."); }
     if (!data || !Array.isArray(data.lists)) return toast("That file is not a Bible Present Mobile backup.");
-    const valid = (it) => it && (it.kind === "note" || (it.kind === "sermon" && it.code) || Number.isInteger(it.b));
-    let added = 0, same = 0;
-    for (const l of data.lists) {
-      if (!l || !Array.isArray(l.items)) continue;
-      const items = l.items.filter(valid);
-      const mine = state.lists.find((x) => x.id === l.id);
-      if (mine && mine.name === l.name && JSON.stringify(mine.items) === JSON.stringify(items)) { same++; continue; }
-      state.lists.push({ id: mine || !l.id ? newList().id : String(l.id),
-                         name: mine ? `${l.name || "List"} (from backup)` : String(l.name || ""), items });
-      added++;
-    }
-    saveLists(); renderList(); closeDialog();
-    toast(added ? `Added ${added} list${added === 1 ? "" : "s"} from the backup` + (same ? `; ${same} already here` : "")
-                : "Everything in this backup is here already.");
+    importLists(data.lists);
   };
   input.click();
+}
+function importLists(lists) {
+  const valid = (it) => it && (it.kind === "note" || (it.kind === "sermon" && it.code) || Number.isInteger(it.b));
+  let added = 0, same = 0;
+  for (const l of lists) {
+    if (!l || !Array.isArray(l.items)) continue;
+    const items = l.items.filter(valid);
+    const mine = state.lists.find((x) => x.id === l.id);
+    if (mine && mine.name === l.name && JSON.stringify(mine.items) === JSON.stringify(items)) { same++; continue; }
+    state.lists.push({ id: mine || !l.id ? newList().id : String(l.id),
+                       name: mine ? `${l.name || "List"} (from backup)` : String(l.name || ""), items });
+    added++;
+  }
+  saveLists(); renderList(); closeDialog();
+  toast(added ? `Added ${added} list${added === 1 ? "" : "s"} from the backup` + (same ? `; ${same} already here` : "")
+              : "Everything in this backup is here already.");
+}
+
+/* Automatic backups on the laptop: every time the iPad connects, all lists and notes go along and
+   the laptop keeps them (its data folder, the last 30 per iPad). An iPad cannot save files by itself. */
+function deviceId() {
+  let id = store.get("device", null);
+  if (!id) { id = Math.random().toString(36).slice(2, 10); store.set("device", id); }
+  return id;
+}
+const hasLists = () => state.lists.some((l) => l.items.length);
+/** Data for in an address (#…=): gzipped when the browser can, marked with a leading "z". */
+async function pack(obj) {
+  if (!window.CompressionStream) return b64enc(obj);
+  const stream = new Blob([JSON.stringify(obj)]).stream().pipeThrough(new CompressionStream("gzip"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return "z" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function unpack(s) {
+  if (s[0] !== "z") return b64dec(s);
+  const bin = atob(s.slice(1).replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+/** Once a week at most: a reminder when there has been no backup for two weeks. */
+function remindBackup() {
+  const last = Math.max(store.get("lastBackup", 0), store.get("laptopBackup", 0));
+  const asked = store.get("backupAsked", 0);
+  if (!state.lists.some((l) => l.items.some((it) => isNote(it) || it.note))) return;
+  if (!asked) { store.set("backupAsked", Date.now()); return; }  // the first reminder comes a week later
+  if (Date.now() - last < 14 * 864e5 || Date.now() - asked < 7 * 864e5) return;
+  store.set("backupAsked", Date.now());
+  showDialog(`<h2>Time for a backup?</h2>
+    <p>${last ? `Your last backup was ${ago(last)}.` : "Your lists and notes have not been backed up yet."}
+       Save a backup in Files or iCloud Drive, or connect to the laptop once: it keeps a backup by itself.</p>
+    <div class="buttons"><button id="r-later" class="ghost">Later</button>
+      <button id="r-now" class="primary">Back up now</button></div>`, (d) => {
+    d.querySelector("#r-later").onclick = closeDialog;
+    d.querySelector("#r-now").onclick = () => { closeDialog(); backupLists(); };
+  });
 }
 const installed = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 
 function showMenu() {
-  const last = store.get("lastBackup", 0), n = trashGet().length;
+  const last = store.get("lastBackup", 0), onLaptop = store.get("laptopBackup", 0), n = trashGet().length;
   showDialog(`<h2>Lists and notes</h2>
     <p>Everything is saved on this device straight away, a note after every letter you type.</p>
     ${installed() ? "" : `<p class="warn">Add Bible Present to the Home Screen (Share <b>⎙</b> → <b>Add to Home Screen</b>).
@@ -1176,14 +1275,17 @@ function showMenu() {
     <div class="menu">
       <button id="m-trash">Recently deleted${n ? ` (${n})` : ""}</button>
       <button id="m-backup">Back up all lists and notes</button>
-      <button id="m-restore">Restore from a backup…</button>
+      <button id="m-restore">Restore from a backup file…</button>
+      <button id="m-laptop">Restore from the laptop…</button>
       <button id="m-help">Help</button>
     </div>
-    <p class="hint">Last backup: ${last ? ago(last) : "never"}. Save it in Files or iCloud Drive.</p>
+    <p class="hint">Last backup file: ${last ? ago(last) : "never"} (save it in Files or iCloud Drive).<br>
+      Last automatic backup on the laptop: ${onLaptop ? ago(onLaptop) : "never"} (made every time you connect).</p>
     <div class="buttons"><button id="m-close" class="primary">Close</button></div>`, (d) => {
     d.querySelector("#m-trash").onclick = showTrash;
     d.querySelector("#m-backup").onclick = () => { closeDialog(); backupLists(); };
     d.querySelector("#m-restore").onclick = restoreBackup;
+    d.querySelector("#m-laptop").onclick = () => connectDialog(true);
     d.querySelector("#m-help").onclick = showHelp;
     d.querySelector("#m-close").onclick = closeDialog;
   });
@@ -1199,12 +1301,17 @@ const HELP = [
   ["Finding Bible verses", `
     <ul><li>Choose a book, a chapter and a verse. Tap a second verse to select the verses in between; tap the selected verse again to clear it.</li>
     <li>Or type in <b>Go to…</b>: <code>joh 3:16-18</code>, <code>ps 23</code>, <code>1 kor 13</code>. Dutch, English and French book names work.</li>
-    <li>The box next to it switches the Bible (SV, KJV, LSG).</li></ul>`],
+    <li>The box next to it switches the Bible (SV, KJV, LSG). That is only for reading on the iPad.</li></ul>
+    <p class="note-box"><b>Two languages on the screen?</b> That happens on the laptop, by itself: Bible Present shows every passage
+       in the laptop's two Bibles (for example Dutch on top, English below), whichever Bible you read on the iPad.
+       They are chosen on the laptop: Settings → Presentation → Top half / Bottom half → Bible.</p>`],
   ["Sermon quotes", `
     <ul><li><b>Find sermon</b>: a code (<code>56-0401M</code>), words from the title or the place. The year box shows one year.</li>
     <li><b>Search the text</b> of all sermons and tap a result to open the sermon at that paragraph. The words are marked.</li>
     <li><b>Find in this sermon</b>: words or a paragraph number (<code>14</code>).</li>
-    <li>NL / EN above the paragraphs switches the language. Tap paragraphs to select them, like verses.</li></ul>`],
+    <li>NL / EN above the paragraphs switches the language you read on the iPad. Tap paragraphs to select them, like verses.</li></ul>
+    <p class="note-box">On the screen the laptop shows the paragraph in its own two languages, whichever language you read here
+       (Settings → App → Sermons on the laptop). Paragraph numbers are the same in every language.</p>`],
   ["Making a list", `
     <ul><li>Select verses or paragraphs and tap <b>＋ Add to list</b>. Typing several in Go to… adds them all: <code>joh 3:16; ps 23:1-4; 56-0401M 12</code>.</li>
     <li>Drag <b>⠿</b> to change the order, <b>✕</b> removes. Tap an item to see it on the left.</li>
@@ -1216,24 +1323,34 @@ const HELP = [
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
     <li>A note opens on the left. Tap another note in the list to switch; <b>Done</b> closes it. An empty note is removed.</li>
     <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).</li>
-    <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it); bullets, numbers and a checklist (tap the circle to tick it off).</li>
+    <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it);
+        <b>Aa</b> for the colour of the text and the font (Serif, Rounded, Typewriter, Handwriting); bullets, numbers and a checklist (tap the circle to tick it off).
+        Select text first, or choose before you type.</li>
     <li>Quicker: start a line with <code>- </code> for bullets, <code>1. </code> for numbers or <code>[] </code> for a checklist. Return on an empty line ends the list.</li>
     <li><b>Undo</b>: ↶ and ↷ in the toolbar, the undo key above the keyboard, or swipe left with three fingers (right to redo).</li></ul>
     <img class="help-anim" data-src="help/note.webp" alt="Writing a note on John 3:16 to 18 with a title, bullets, a checklist and a green marker">
     <img class="help-anim" data-src="help/all-notes.webp" alt="All notes of the list as one document, and writing under Hebrews 11:1">`],
-  ["Outline and printing", `
-    <p><b>Outline</b> shows the whole list as you will go through it: your notes, the references and the full texts.
-       <b>Share</b> sends it as text, <b>Print</b> prints it (or makes a PDF via the print options).</p>`],
+  ["Outline, Word and PDF", `
+    <p><b>Outline</b> (under the list) shows the whole list as you will go through it: your notes, the references and the full texts.
+       Switch off <i>With the Bible and sermon texts</i> for just the references and your notes.</p>
+    <ul><li><b>Word</b> makes a Word document (.docx) with the formatting of your notes; save it in Files or open it in Word or Pages.</li>
+    <li><b>PDF / Print</b> opens the print screen: print it, or tap Share (top right) → Save to Files for a PDF.</li>
+    <li><b>Share</b> sends it as plain text (mail, messages…).</li></ul>`],
   ["Getting the list to the laptop", `
     <ul><li><b>Connect to laptop</b> (same Wi-Fi): on the laptop, Bible Present → <b>iPad</b> → switch it on, then enter the address and the 4-digit code.
        Your list goes along, and the iPad becomes the presenting console: tap an item to put it on the screen, Next/Previous, Blank, languages.</li>
+    <li>The languages on the screen are the laptop's (see <i>Finding Bible verses</i>). The three language buttons in the console choose
+       whether the screen shows both, or only the top or the bottom one.</li>
     <li>Your notes stay on the iPad: the console shows them in their places in the service list, only for you.</li>
     <li><b>Back to my lists</b> brings the list back, with the changes and your notes.</li>
     <li>Without Wi-Fi: <b>Send as file</b> (AirDrop, mail) and open it on the laptop with Service list ⋯ → Open list, or <b>Share as text</b> and Paste list.</li></ul>`],
   ["Keeping your notes safe", `
     <ul><li>Everything is saved straight away, a note after every letter you type.</li>
     <li>Deleted notes, passages with a note and lists go to <b>⋯ → Recently deleted</b> for 30 days.</li>
-    <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup</b> adds the lists from such a file again (nothing is overwritten).</li>
+    <li><b>Automatic backup on the laptop:</b> every time you connect, the laptop keeps a copy of all your lists and notes (the last 30).
+        <b>⋯ → Restore from the laptop</b> brings a backup back. The laptop needs Bible Present 1.7 or later.</li>
+    <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup file</b> adds the lists from such a file again (nothing is overwritten).
+        If there has been no backup for two weeks, the app reminds you.</li>
     <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li></ul>`],
 ];
 function showHelp() {
@@ -1395,14 +1512,17 @@ function showOutline() {
   const list = currentList();
   if (!list.items.length) return toast("The list is empty.");
   showDialog(`<h2>${esc(list.name || "Outline")}</h2>
+    <label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> With the Bible and sermon texts</label>
     <div class="outline" id="outline"></div>
-    <div class="buttons"><button id="o-print" class="ghost">Print</button>
+    <div class="buttons"><button id="o-word" class="ghost">Word</button><button id="o-print" class="ghost">PDF / Print</button>
       <button id="o-share" class="ghost">Share</button><button id="o-close" class="primary">Close</button></div>`, (d) => {
     d.classList.add("wide");
     d.querySelector("#o-close").onclick = closeDialog;
+    d.querySelector("#o-texts").onchange = (e) => { store.set("outlineTexts", e.target.checked); renderOutline(list); };
     d.querySelector("#o-share").onclick = () =>
       sendText(outlineText(list), list.name || "Outline", "Copied the outline.");
-    d.querySelector("#o-print").onclick = () => {
+    d.querySelector("#o-word").onclick = () => sendFile(outlineDocx(list), list.name || "Outline");
+    d.querySelector("#o-print").onclick = () => {  // the print screen can also save it as a PDF (Share → Save to Files)
       document.body.classList.add("printing");
       window.print();
       setTimeout(() => document.body.classList.remove("printing"), 500);
@@ -1435,7 +1555,8 @@ function renderOutline(list) {
     const sec = el("div", "o-item");
     sec.append(el("div", "o-ref", itemLabel(it)));
     const paras = passageParas(it);
-    if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
+    if (!withTexts()) { /* the references and notes only */ }
+    else if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
     else sec.append(el("p", "o-text", it.snippet || ""));
     if (it.note) sec.append(noteBlock(it.note));
     box.append(sec);
@@ -1447,12 +1568,160 @@ function outlineText(list) {
     if (isNote(it)) { lines.push(noteText(it.text), ""); continue; }
     lines.push(itemLabel(it));
     const paras = passageParas(it);
-    if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
+    if (!withTexts()) { /* the references and notes only */ }
+    else if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
     else if (it.snippet) lines.push(it.snippet);
     if (it.note) lines.push(noteText(it.note));
     lines.push("");
   }
   return lines.join("\n").trim();
+}
+const withTexts = () => store.get("outlineTexts", true);
+
+// ---------------------------------------------------------------- the outline as a Word document (.docx)
+/* A .docx is a zip of a few XML files. Made here, without a library: titles and headings become
+   Word's own styles, so the document has a navigation pane; the formatting of the notes comes along. */
+const WORD_FONTS = { serif: "Georgia", rounded: "Arial Rounded MT Bold", mono: "Courier New", hand: "Segoe Print" };
+const hex2 = (n) => Math.round(n).toString(16).padStart(2, "0").toUpperCase();
+const markerHex = (name) => { const [r, g, b, a] = MARKERS[name]; return [r, g, b].map((c) => hex2(c * a + 255 * (1 - a))).join(""); };
+const xml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/** A note as Word paragraphs: [{style, runs: [{text, fmt} | {br}]}]. */
+function noteParas(html) {
+  const t = document.createElement("template");
+  t.innerHTML = cleanNote(noteHtml(html));
+  const out = [];
+  let cur = null;
+  const para = (style, prefix) => { cur = { style, runs: prefix ? [{ text: prefix, fmt: {} }] : [] }; out.push(cur); };
+  const walk = (node, fmt) => {
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) { if (!cur) para("Normal"); cur.runs.push({ text: c.data, fmt }); continue; }
+      const tag = c.tagName;
+      if (tag === "BR") { if (!cur) para("Normal"); else if (c.nextSibling) cur.runs.push({ br: true }); continue; }
+      if (tag === "UL" || tag === "OL" || (/^(DIV|P|H1|H2|H3)$/.test(tag) && c.querySelector("div, p, h1, h2, h3, ul, ol"))) {
+        cur = null; walk(c, fmt); cur = null; continue;  // holds blocks of its own
+      }
+      if (/^(DIV|P|H1|H2|H3)$/.test(tag)) { para({ H1: "Heading1", H2: "Heading2", H3: "Heading3" }[tag] || "Normal"); walk(c, fmt); cur = null; continue; }
+      if (tag === "LI") {
+        const list = c.parentElement;
+        para("ListItem", list.classList.contains("checklist") ? (c.classList.contains("checked") ? "☑\t" : "☐\t")
+          : list.tagName === "OL" ? `${[...list.children].indexOf(c) + 1}.\t` : "•\t");
+        walk(c, fmt); cur = null; continue;
+      }
+      const f = { ...fmt };
+      if (/^(B|STRONG)$/.test(tag)) f.b = true;
+      if (/^(I|EM)$/.test(tag)) f.i = true;
+      if (tag === "U") f.u = true;
+      if (/^(S|STRIKE)$/.test(tag)) f.s = true;
+      if (tag === "MARK" || tag === "SPAN") {
+        const st = inlineStyle(c);
+        if (st.marker) f.fill = markerHex(st.marker);
+        if (st.color) f.color = TEXT_COLORS[st.color].map(hex2).join("");
+        if (st.font) f.font = WORD_FONTS[st.font];
+      }
+      walk(c, f);
+    }
+  };
+  walk(t.content, {});
+  return out;
+}
+function runXml(r) {
+  if (r.br) return "<w:r><w:br/></w:r>";
+  const f = r.fmt || {};
+  const pr = (f.font ? `<w:rFonts w:ascii="${f.font}" w:hAnsi="${f.font}" w:cs="${f.font}"/>` : "") + (f.b ? "<w:b/>" : "") +
+    (f.i ? "<w:i/>" : "") + (f.s ? "<w:strike/>" : "") + (f.color ? `<w:color w:val="${f.color}"/>` : "") +
+    (f.u ? '<w:u w:val="single"/>' : "") + (f.fill ? `<w:shd w:val="clear" w:color="auto" w:fill="${f.fill}"/>` : "");
+  const body = String(r.text).split("\n").map((line) => line.split("\t")
+    .map((s) => (s ? `<w:t xml:space="preserve">${xml(s)}</w:t>` : "")).join("<w:tab/>")).join("<w:br/>");
+  return `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}${body}</w:r>`;
+}
+const paraXml = (p) => `<w:p><w:pPr><w:pStyle w:val="${p.style}"/></w:pPr>${p.runs.map(runXml).join("")}</w:p>`;
+
+function outlineDocx(list) {
+  const paras = [{ style: "Title", runs: [{ text: list.name || "Outline" }] }];
+  for (const it of list.items) {
+    if (isNote(it)) { paras.push(...noteParas(it.text)); continue; }
+    paras.push({ style: "Reference", runs: [{ text: itemLabel(it) }] });
+    const texts = passageParas(it);
+    if (!withTexts()) { /* the references and notes only */ }
+    else if (texts) for (const [n, t] of texts) paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F" } }, { text: t }] });
+    else if (it.snippet) paras.push({ style: "Passage", runs: [{ text: it.snippet }] });
+    if (it.note) paras.push(...noteParas(it.note));
+  }
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${paras.map(paraXml).join("")}` +
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr></w:body></w:document>';
+  const style = (id, name, ppr, rpr, extra = "") => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/>` +
+    `<w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>${extra}<w:pPr>${ppr}</w:pPr><w:rPr>${rpr}</w:rPr></w:style>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}>` +
+    '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri" w:eastAsia="Calibri"/>' +
+    '<w:sz w:val="23"/><w:szCs w:val="23"/><w:lang w:val="nl-NL"/></w:rPr></w:rPrDefault>' +
+    '<w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+    '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+    style("Title", "Title", '<w:spacing w:after="240"/>', '<w:b/><w:color w:val="324158"/><w:sz w:val="48"/><w:szCs w:val="48"/>') +
+    style("Heading1", "heading 1", '<w:keepNext/><w:spacing w:before="240" w:after="80"/><w:outlineLvl w:val="0"/>', '<w:b/><w:sz w:val="36"/><w:szCs w:val="36"/>') +
+    style("Heading2", "heading 2", '<w:keepNext/><w:spacing w:before="200" w:after="60"/><w:outlineLvl w:val="1"/>', '<w:b/><w:sz w:val="30"/><w:szCs w:val="30"/>') +
+    style("Heading3", "heading 3", '<w:keepNext/><w:spacing w:before="160" w:after="40"/><w:outlineLvl w:val="2"/>', '<w:b/><w:sz w:val="26"/><w:szCs w:val="26"/>') +
+    style("Reference", "Reference", '<w:keepNext/><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="D5DCE4"/></w:pBdr><w:spacing w:before="280" w:after="80"/>',
+          '<w:b/><w:color w:val="324158"/><w:sz w:val="26"/><w:szCs w:val="26"/>') +
+    style("Passage", "Passage", '<w:spacing w:after="60"/><w:ind w:left="284"/>', '<w:color w:val="404B5A"/>') +
+    style("ListItem", "List item", '<w:tabs><w:tab w:val="left" w:pos="567"/></w:tabs><w:ind w:left="567" w:hanging="283"/><w:spacing w:after="40"/>', "") +
+    "</w:styles>";
+  const files = {
+    "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>',
+    "_rels/.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+    "word/_rels/document.xml.rels": '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    "word/document.xml": doc,
+    "word/styles.xml": styles,
+  };
+  const name = (list.name || "Outline").replace(/[\\/:*?"<>|]+/g, "-").trim();
+  return new File([zipFiles(files)], `${name}.docx`, { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+/** A zip file (stored, not compressed) of {name: text}. */
+let crcTable = null;
+function crc32(bytes) {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crcTable[n] = c >>> 0; }
+  }
+  let c = 0xFFFFFFFF;
+  for (const b of bytes) c = crcTable[(c ^ b) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipFiles(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  const d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const nameBytes = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const head = (sig, extra) => {
+      const h = new DataView(new ArrayBuffer(extra ? 46 : 30));
+      let i = 0;
+      const u32 = (v) => { h.setUint32(i, v, true); i += 4; }, u16 = (v) => { h.setUint16(i, v, true); i += 2; };
+      u32(sig);
+      if (extra) u16(20);  // made by
+      u16(20); u16(0x0800); u16(0); u16(time); u16(date); u32(crc); u32(data.length); u32(data.length); u16(nameBytes.length); u16(0);
+      if (extra) { u16(0); u16(0); u16(0); u32(0); u32(offset); }
+      return new Uint8Array(h.buffer);
+    };
+    const local = head(0x04034B50, false);
+    parts.push(local, nameBytes, data);
+    central.push(head(0x02014B50, true), nameBytes);
+    offset += local.length + nameBytes.length + data.length;
+  }
+  const size = central.reduce((s, p) => s + p.length, 0), n = Object.keys(files).length;
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054B50, true); end.setUint16(8, n, true); end.setUint16(10, n, true);
+  end.setUint32(12, size, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)]);
 }
 
 // ---------------------------------------------------------------- the Go to / add box
@@ -1592,6 +1861,8 @@ async function initConnected(info) {
   if (conn.handoff && conn.handoff.id) {  // the list with its notes, for the console and the way back
     store.set("returnList", { id: conn.handoff.id, name: conn.handoff.name, plan: conn.handoff.plan || conn.handoff.items });
   }
+  conn.backup = h.get("backup");    // all lists, for the laptop to keep
+  conn.restore = h.get("restore");  // asked for a backup from the laptop (this iPad's id)
   conn.retList = store.get("returnList", null);
   $("back-btn").classList.toggle("hidden", !conn.ret);
   history.replaceState(null, "", location.pathname);  // keep the code etc. out of the address bar
@@ -1679,6 +1950,53 @@ function startConnected() {
     });
   }
   loadSermonIndex();
+  if (conn.backup) sendBackup();
+  if (conn.restore) showLaptopBackups();
+}
+
+async function sendBackup() {
+  const packed = conn.backup;
+  conn.backup = null;
+  try {
+    const res = await fetch("api/backup", { method: "POST", cache: "no-store",
+      headers: { "Content-Type": "application/json", "X-BP-Token": conn.token || "" },
+      body: JSON.stringify(await unpack(packed)) });
+    if (res.ok) store.set("backedUp", Date.now());
+  } catch { /* the console works without it */ }
+}
+const authGet = (path) => fetch(path, { headers: { "X-BP-Token": conn.token || "" }, cache: "no-store" });
+async function showLaptopBackups() {
+  const mine = conn.restore;
+  conn.restore = null;
+  let backups;
+  try {
+    const res = await authGet("api/backups");
+    if (res.status === 404) return toast("This laptop needs Bible Present 1.7 or later for backups.");
+    backups = await res.json();
+  } catch { return toast("The laptop does not answer."); }
+  showDialog(`<h2>Backups on this laptop</h2>
+    <p>Choose a backup: its lists are added to your lists on the iPad. Nothing is overwritten.</p>
+    <div class="menu" id="bk"></div>
+    <div class="buttons"><button id="bk-close" class="ghost">Cancel</button></div>`, (d) => {
+    d.classList.add("wide");
+    const box = d.querySelector("#bk");
+    if (!backups.length) box.append(el("p", "", "There are no backups on this laptop yet."));
+    for (const b of backups) {
+      const btn = el("button", "backup-row");
+      const when = new Date(b.saved).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+      const names = b.lists.map((l) => l.name || "List").join(", ");
+      btn.innerHTML = `<b>${esc(when)}</b>${b.device === mine ? " · this iPad" : ""} · ${b.lists.length} list${b.lists.length === 1 ? "" : "s"}
+        <span class="hint">${esc(names.length > 140 ? names.slice(0, 140) + "…" : names)}</span>`;
+      btn.onclick = async () => {
+        try {
+          const data = await (await authGet(`api/backup?device=${encodeURIComponent(b.device)}&name=${encodeURIComponent(b.name)}`)).json();
+          location.href = `${conn.ret}#restore=${await pack({ lists: data.lists })}`;
+        } catch { toast("That backup could not be read."); }
+      };
+      box.append(btn);
+    }
+    d.querySelector("#bk-close").onclick = closeDialog;
+  });
 }
 
 /** A command for the laptop. Never waits long (a slow request must not hold up the next one),
@@ -1721,7 +2039,8 @@ function offerHandoff() {
 function backToLists() {
   const list = conn.retList || {};
   const items = wovenItems(conn.remote ? conn.remote.service : [], consolePlan());
-  location.href = `${conn.ret}#return=${b64enc({ id: list.id, name: list.name, items, woven: true })}`;
+  location.href = `${conn.ret}#return=${b64enc({ id: list.id, name: list.name, items, woven: true,
+                                                 backedUp: store.get("backedUp", 0) })}`;
 }
 const consolePlan = () => (conn.retList && conn.retList.plan) || [];
 /** Notes in the console: edited here, kept on this iPad until going back to the lists. */
@@ -1859,20 +2178,22 @@ async function followLive(pos) {
 }
 
 /* Preparing (GitHub version): open the laptop's page, taking the current list along. */
-function connectDialog() {
+function connectDialog(restore = false) {
   const list = currentList();
   const saved = store.get("laptop", "biblepresent.local:8080");
-  showDialog(`<h2>Connect to the laptop</h2>
+  showDialog(`<h2>${restore ? "Restore from the laptop" : "Connect to the laptop"}</h2>
+    ${restore ? `<p>The laptop keeps a backup of your lists and notes every time you connect.
+       Choose one there; its lists are added to yours (nothing is overwritten).</p>` : ""}
     <p>The iPad and the laptop must be on the <b>same Wi-Fi</b>, and on the laptop
        Bible Present → <b>iPad</b> must be switched on.</p>
     <input id="addr" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(saved)}">
     <p>The laptop shows this address (and a QR code you can also scan with the camera).</p>
-    ${list.items.length ? `<p><label><input type="checkbox" id="take" checked> Take “${esc(list.name || "this list")}” along
+    ${list.items.length && !restore ? `<p><label><input type="checkbox" id="take" checked> Take “${esc(list.name || "this list")}” along
       (${countText(list.items)})</label></p>` : ""}
     <div class="buttons"><button id="c-cancel" class="ghost">Cancel</button>
       <button id="c-go" class="primary">Connect</button></div>`, (d) => {
     d.querySelector("#c-cancel").onclick = closeDialog;
-    d.querySelector("#c-go").onclick = () => {
+    d.querySelector("#c-go").onclick = async () => {
       const addr = d.querySelector("#addr").value.trim().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
       if (!addr) return;
       store.set("laptop", addr);
@@ -1883,18 +2204,28 @@ function connectDialog() {
         params.set("handoff", b64enc({ id: list.id, name: list.name, items: passages(list.items).map(toService),
                                        plan: list.items.map(toPlan) }));
       }
+      if (restore) params.set("restore", deviceId());
+      else if (hasLists()) {  // the automatic backup (a laptop up to 1.6 ignores it)
+        try { params.set("backup", await pack({ device: deviceId(), saved: new Date().toISOString(), lists: state.lists })); } catch { }
+      }
       location.href = `http://${addr}/#${params}`;
     };
   });
 }
 
-/** Back from the laptop: the list comes back as it is on the laptop now. */
-function handleReturn() {
+/** Back from the laptop: the list comes back as it is on the laptop now (or the lists of a backup). */
+async function handleReturn() {
   const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("restore")) {
+    history.replaceState(null, "", location.pathname);
+    try { importLists((await unpack(h.get("restore"))).lists || []); } catch { toast("That backup could not be read."); }
+    return;
+  }
   if (!h.get("return")) return;
   history.replaceState(null, "", location.pathname);
   let data;
   try { data = b64dec(h.get("return")); } catch { return; }
+  if (data.backedUp) store.set("laptopBackup", data.backedUp);
   let list = state.lists.find((l) => l.id === data.id);
   if (!list) { list = newList(data.name || "From the laptop"); state.lists.push(list); }
   if (list.items.some((it) => isNote(it) || it.note)) trashPut({ type: "list", list, why: "the version before the laptop" });
@@ -1993,7 +2324,7 @@ async function init() {
     return;
   }
   renderList();
-  handleReturn();
+  if (/[#&](return|restore)=/.test(location.hash)) await handleReturn(); else remindBackup();
   loadSermonIndex();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

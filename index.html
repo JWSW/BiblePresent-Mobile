@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.12">
+<link rel="stylesheet" href="style.css?v=1.13">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -119,6 +119,7 @@
         <button data-cmd="underline" aria-label="Underline"><u>U</u></button>
         <button data-cmd="strikeThrough" aria-label="Strikethrough"><s>S</s></button>
         <button data-cmd="hilite" aria-label="Marker"><span class="marker-icon">A</span></button>
+        <button data-cmd="textstyle" aria-label="Text colour and font"><span class="text-icon">Aa</span></button>
         <span class="sep"></span>
         <button data-list="ul" aria-label="Bulleted list">• ≡</button>
         <button data-list="ol" aria-label="Numbered list">1. ≡</button>
@@ -130,6 +131,23 @@
           <button data-marker="pink" class="swatch m-pink" aria-label="Pink marker"></button>
           <button data-marker="orange" class="swatch m-orange" aria-label="Orange marker"></button>
           <button data-marker="none" class="swatch m-none" aria-label="No marker">✕</button>
+        </span>
+        <span class="text-styles hidden" id="text-styles">
+          <span class="row-label">Colour</span>
+          <button data-color="" class="swatch c-default" aria-label="Normal colour">A</button>
+          <button data-color="red" class="swatch c-red" aria-label="Red">A</button>
+          <button data-color="orange" class="swatch c-orange" aria-label="Orange">A</button>
+          <button data-color="green" class="swatch c-green" aria-label="Green">A</button>
+          <button data-color="blue" class="swatch c-blue" aria-label="Blue">A</button>
+          <button data-color="purple" class="swatch c-purple" aria-label="Purple">A</button>
+          <button data-color="gray" class="swatch c-gray" aria-label="Grey">A</button>
+          <span class="row-break"></span>
+          <span class="row-label">Font</span>
+          <button data-font="">Standard</button>
+          <button data-font="serif" class="f-serif">Serif</button>
+          <button data-font="rounded" class="f-rounded">Rounded</button>
+          <button data-font="mono" class="f-mono">Typewriter</button>
+          <button data-font="hand" class="f-hand">Handwriting</button>
         </span>
       </div>
       <div class="note-body" id="note-body"></div>
@@ -195,6 +213,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.12"></script>
+<script src="app.js?v=1.13"></script>
 </body>
 </html>

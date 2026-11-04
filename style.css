@@ -232,6 +232,23 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .swatch.m-blue { background: rgba(10, 132, 255, .7); } .swatch.m-pink { background: rgba(255, 45, 145, .65); }
 .swatch.m-orange { background: rgba(255, 149, 0, .8); } .swatch.m-none { color: var(--muted); font-weight: 800; }
 .marker-colors .swatch.active { outline: 3px solid var(--blue); outline-offset: 2px; }
+/* text colour and font */
+.text-icon { font-weight: 800; background: linear-gradient(90deg, #FF3B30, #FF9500, #34C759, #0A84FF, #AF52DE);
+             -webkit-background-clip: text; background-clip: text; color: transparent; }
+.note-tools button.active .text-icon { color: #fff; background: none; }
+.text-styles { display: flex; gap: 6px; flex-basis: 100%; flex-wrap: wrap; align-items: center; padding: 2px 0; }
+.text-styles .row-label { font-size: 12px; font-weight: 700; color: var(--muted); width: 52px; }
+.text-styles .row-break { flex-basis: 100%; height: 0; }
+.text-styles .swatch { width: 34px; min-height: 34px; padding: 0; border-radius: 50%; font-weight: 800; font-size: 16px; }
+.text-styles .swatch.active { outline: 3px solid var(--blue); outline-offset: 2px; background: var(--field); }
+.text-styles .swatch.active.c-default { color: var(--text); }
+.text-styles button.active[data-font] { background: var(--blue); border-color: var(--blue); color: #fff; }
+.c-red { color: #FF3B30; } .c-orange { color: #FF9500; } .c-green { color: #34C759; }
+.c-blue { color: #0A84FF; } .c-purple { color: #AF52DE; } .c-gray { color: #8E8E93; }
+.f-serif { font-family: ui-serif, Georgia, "Times New Roman", serif; }
+.f-rounded { font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", sans-serif; }
+.f-mono { font-family: ui-monospace, Menlo, Consolas, "Courier New", monospace; }
+.f-hand { font-family: Noteworthy, "Bradley Hand", "Segoe Print", cursive; }
 /* formatting inside notes (editor and outline) */
 .note-doc h1 { font-size: 1.6em; margin: .3em 0 .2em; line-height: 1.2; }
 .note-doc h2 { font-size: 1.3em; margin: .3em 0 .2em; line-height: 1.25; }
@@ -245,7 +262,7 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .note-doc ul.checklist > li.checked::after { content: "✓"; position: absolute; left: .22em; top: .05em; font-size: .8em;
                                              color: #fff; font-weight: 800; }
 .note-doc ul.checklist > li.checked { color: var(--muted); }
-.note-doc mark { background: rgba(255, 204, 0, .45); color: inherit; font-weight: inherit; border-radius: 2px; }
+:where(.note-doc) mark { background: rgba(255, 204, 0, .45); color: inherit; font-weight: inherit; border-radius: 2px; }
 .note-doc mark.m-green { background: rgba(52, 199, 89, .38); } .note-doc mark.m-blue { background: rgba(10, 132, 255, .32); }
 .note-doc mark.m-pink { background: rgba(255, 45, 145, .3); } .note-doc mark.m-orange { background: rgba(255, 149, 0, .42); }
 .marker-icon { background: rgba(255, 204, 0, .7); color: #1F2B3B; padding: 0 4px; border-radius: 3px; font-weight: 800; }
@@ -269,6 +286,7 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .help-body { padding: 0 4px 8px; }
 .dialog .help-body p, .help-body li { color: var(--text); margin: 4px 0; }
 .help-body ul { padding-left: 1.3em; margin: 4px 0; }
+.help-body .note-box { background: var(--note-bg); color: var(--note-text); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
 .help-anim { display: block; width: 100%; aspect-ratio: 1180 / 820; margin: 8px 0; border-radius: 10px;
              border: 1px solid var(--border); background: var(--field); }
 .help-body code { background: var(--field); border-radius: 4px; padding: 0 4px; font-size: 14px; }
@@ -332,6 +350,10 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .dialog .buttons.stacked button { width: 100%; min-height: 48px; }
 .dialog .error { color: var(--coral); font-weight: 600; min-height: 1.4em; }
 .dialog.wide { width: min(760px, 100%); }
+.o-texts { display: flex; gap: 8px; align-items: center; justify-content: flex-start; font-size: 14px; color: var(--muted); margin: -4px 0 8px; }
+.dialog .o-texts input { width: 20px; height: 20px; min-height: 0; flex: none; margin: 0; padding: 0; }
+.backup-row { text-align: left; }
+.backup-row .hint { display: block; font-weight: 400; margin: 2px 0 0; }
 .outline { max-height: 62vh; overflow-y: auto; margin-bottom: 12px; padding-right: 4px; }
 .outline .o-item { margin-bottom: 14px; }
 .outline .o-ref { font-weight: 800; color: var(--title); }
@@ -345,7 +367,7 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
   body.printing > *:not(#overlay) { display: none !important; }
   body.printing #overlay { position: static; background: none; padding: 0; display: block; }
   body.printing .dialog { box-shadow: none; width: auto; padding: 0; }
-  body.printing .dialog .buttons { display: none; }
+  body.printing .dialog .buttons, body.printing .o-texts { display: none; }
   body.printing .outline { max-height: none; overflow: visible; }
 }
 
