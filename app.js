@@ -1269,7 +1269,8 @@ const installed = () => navigator.standalone === true || matchMedia("(display-mo
 function showMenu() {
   const last = store.get("lastBackup", 0), onLaptop = store.get("laptopBackup", 0), n = trashGet().length;
   showDialog(`<h2>Lists and notes</h2>
-    <p>Everything is saved on this device straight away, a note after every letter you type.</p>
+    <p>Everything is saved on this device straight away, a note after every letter you type.
+       <span id="m-persist"></span></p>
     ${installed() ? "" : `<p class="warn">Add Bible Present to the Home Screen (Share <b>⎙</b> → <b>Add to Home Screen</b>).
       Safari may clear the data of a website you have not opened for a while; an app on the Home Screen is kept.</p>`}
     <div class="menu">
@@ -1282,6 +1283,12 @@ function showMenu() {
     <p class="hint">Last backup file: ${last ? ago(last) : "never"} (save it in Files or iCloud Drive).<br>
       Last automatic backup on the laptop: ${onLaptop ? ago(onLaptop) : "never"} (made every time you connect).</p>
     <div class="buttons"><button id="m-close" class="primary">Close</button></div>`, (d) => {
+    if (navigator.storage && navigator.storage.persisted) {
+      navigator.storage.persisted().then((kept) => {
+        const p = d.querySelector("#m-persist");
+        if (p && kept) p.textContent = "This device keeps the data permanently: it is not cleared to make room.";
+      }).catch(() => {});
+    }
     d.querySelector("#m-trash").onclick = showTrash;
     d.querySelector("#m-backup").onclick = () => { closeDialog(); backupLists(); };
     d.querySelector("#m-restore").onclick = restoreBackup;
@@ -1333,6 +1340,9 @@ const HELP = [
   ["Outline, Word and PDF", `
     <p><b>Outline</b> (under the list) shows the whole list as you will go through it: your notes, the references and the full texts.
        Switch off <i>With the Bible and sermon texts</i> for just the references and your notes.</p>
+    <p><b>Language</b> puts the book names, the Bible text (SV, KJV or LSG) and the sermon texts in that language; your notes stay as you wrote them.
+       Verse numbers are converted where Bibles count differently (SV Psalm 51:3 is Psalm 51:1 in the KJV).
+       A sermon that Message Hub does not have in that language keeps its own language.</p>
     <ul><li><b>Word</b> makes a Word document (.docx) with the formatting of your notes; save it in Files or open it in Word or Pages.</li>
     <li><b>PDF / Print</b> opens the print screen: print it, or tap Share (top right) → Save to Files for a PDF.</li>
     <li><b>Share</b> sends it as plain text (mail, messages…).</li></ul>`],
@@ -1512,13 +1522,20 @@ function showOutline() {
   const list = currentList();
   if (!list.items.length) return toast("The list is empty.");
   showDialog(`<h2>${esc(list.name || "Outline")}</h2>
-    <label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> With the Bible and sermon texts</label>
+    <div class="o-options"><label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> With the Bible and sermon texts</label>
+      <label class="o-lang">Language <select id="o-lang">${Object.entries(EXPORT_LANGS).map(([k, v]) =>
+        `<option value="${k}" ${k === exportLang() ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
     <div class="outline" id="outline"></div>
     <div class="buttons"><button id="o-word" class="ghost">Word</button><button id="o-print" class="ghost">PDF / Print</button>
       <button id="o-share" class="ghost">Share</button><button id="o-close" class="primary">Close</button></div>`, (d) => {
     d.classList.add("wide");
     d.querySelector("#o-close").onclick = closeDialog;
     d.querySelector("#o-texts").onchange = (e) => { store.set("outlineTexts", e.target.checked); renderOutline(list); };
+    d.querySelector("#o-lang").onchange = (e) => {
+      store.set("outlineLang", e.target.value);
+      renderOutline(list);
+      prepareExport(list).then(() => renderOutline(list));
+    };
     d.querySelector("#o-share").onclick = () =>
       sendText(outlineText(list), list.name || "Outline", "Copied the outline.");
     d.querySelector("#o-word").onclick = () => sendFile(outlineDocx(list), list.name || "Outline");
@@ -1529,16 +1546,89 @@ function showOutline() {
     };
     renderOutline(list);
   });
-  // sermon texts that are not here yet: load them, then show them
-  const missing = passages(list.items).filter((it) => !passageParas(it));
-  Promise.all(missing.map(loadSermonParas)).then(() => { if (missing.length) renderOutline(list); });
+  // sermon texts that are not here yet (and the other Bible for another language): load them, then show them
+  prepareExport(list).then(() => renderOutline(list));
 }
-async function loadSermonParas(it) {
-  if (it.kind !== "sermon") return;
+async function loadSermonParas(it, lang = sermonLang(it)) {
+  if (it.kind !== "sermon" || paraCache[`${lang}/${it.code}`]) return;
   try {
-    const data = await api(`${sermonLang(it)}/sermons/${it.code}/blocks`);
-    paraCache[`${sermonLang(it)}/${it.code}`] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
-  } catch { /* offline: the short preview stays */ }
+    const data = await api(`${lang}/sermons/${it.code}/blocks`);
+    paraCache[`${lang}/${it.code}`] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
+  } catch { /* offline (or not in that language): the short preview stays */ }
+}
+
+/* The outline in another language: the book names, the Bible of that language and the sermon text in
+   that language. Bibles number some verses differently (SV Psalm 51:3 = KJV Psalm 51:1: the Dutch
+   count a psalm's heading as verse 1), so the passage is converted with the standard tables. */
+const EXPORT_LANGS = { "": "As on the iPad", nl: "Nederlands", en: "English", fr: "Français" };
+const exportLang = () => store.get("outlineLang", "");
+let verseTables = null;
+async function loadVerseTables() {
+  if (verseTables) return;
+  try {
+    const d = await (await fetch("data/versification.json")).json();
+    const engToOrg = new Map(), orgToEng = new Map();
+    for (const [b1, c1, v1, b2, c2, v2] of d.eng_to_org) {
+      const e = `${b1}.${c1}.${v1}`, o = `${b2}.${c2}.${v2}`;
+      if (!engToOrg.has(e)) engToOrg.set(e, []);
+      engToOrg.get(e).push([b2, c2, v2]);
+      if (!orgToEng.has(o)) orgToEng.set(o, []);
+      orgToEng.get(o).push([b1, c1, v1]);
+    }
+    verseTables = { eng: d.eng, org: d.org, engToOrg, orgToEng };
+  } catch { verseTables = { eng: [], org: [], engToOrg: new Map(), orgToEng: new Map() }; }  // then: the same numbers
+}
+const bibleFor = (lang) => BIBLES.find((b) => b.lang === lang);
+async function loadBibleData(id) {
+  if (!bibleCache[id]) bibleCache[id] = await (await fetch(`data/${id}.json`)).json();
+  return bibleCache[id];
+}
+/** Does this Bible number this chapter the English way ("eng"), the original way ("org"), or are they the same? */
+function numbering(bible, b, c) {
+  const n = (bible.books[b][c - 1] || []).length, e = (verseTables.eng[b] || [])[c - 1], o = (verseTables.org[b] || [])[c - 1];
+  return e === o ? "same" : n === o ? "org" : n === e ? "eng" : "same";
+}
+/** The verses [[c, v]] in Bible `to` of verses v1-v2 of chapter c in Bible `from`. */
+function convertVerses(from, to, b, c, v1, v2) {
+  const out = [], seen = new Set();
+  for (let v = v1; v <= (v2 || v1); v++) {
+    const orgs = numbering(from, b, c) === "eng" ? verseTables.engToOrg.get(`${b}.${c}.${v}`) || [[b, c, v]] : [[b, c, v]];
+    for (const [ob, oc, ov] of orgs) {
+      const targets = numbering(to, ob, oc) === "eng" || (to.books[ob][oc - 1] || []).length < ov
+        ? verseTables.orgToEng.get(`${ob}.${oc}.${ov}`) || [[ob, oc, ov]] : [[ob, oc, ov]];
+      for (const [, tc, tv] of targets) {
+        const key = `${tc}.${tv}`;
+        if (tv > 0 && !seen.has(key) && to.books[b][tc - 1] && to.books[b][tc - 1][tv - 1]) { seen.add(key); out.push([tc, tv]); }
+      }
+    }
+  }
+  return out;
+}
+/** A passage as exported: {label, paras: [[number, text]] or null}, in the chosen language. */
+function exportItem(it) {
+  const lang = exportLang();
+  if (!lang) return { label: itemLabel(it), paras: passageParas(it) };
+  if (it.kind === "sermon") {
+    const own = paraCache[`${lang}/${it.code}`];
+    const paras = own && own.length ? own.filter(([n]) => n >= it.v1 && n <= (it.v2 || it.v1)) : passageParas(it);
+    return { label: `${it.code} ¶${range(it.v1, it.v2)}  ${sermonTitle(it.code, own && own.length ? lang : it.lang)}`, paras };
+  }
+  const target = bibleFor(lang), to = target && bibleCache[target.id];
+  if (!to || !verseTables) return { label: `${bookName(it.b, lang)} ${it.c}:${range(it.v1, it.v2)}`, paras: passageParas(it) };
+  const refs = convertVerses(state.bible, to, it.b, it.c, it.v1, it.v2);
+  if (!refs.length) return { label: `${bookName(it.b, lang)} ${it.c}:${range(it.v1, it.v2)}`, paras: [] };
+  const [c1, v1] = refs[0], [c2, v2] = refs[refs.length - 1];
+  const label = `${bookName(it.b, lang)} ${c1}:${c1 === c2 ? range(v1, v2) : `${v1}-${c2}:${v2}`}`;
+  return { label, paras: refs.map(([c, v]) => [c1 === c2 ? v : `${c}:${v}`, to.books[it.b][c - 1][v - 1]]) };
+}
+/** Loads what the export needs (the other Bible, the tables, sermon texts). */
+async function prepareExport(list) {
+  const lang = exportLang(), jobs = [];
+  for (const it of passages(list.items)) {
+    if (it.kind === "sermon") jobs.push(loadSermonParas(it), lang ? loadSermonParas(it, lang) : null);
+  }
+  if (lang && bibleFor(lang)) jobs.push(loadVerseTables(), loadBibleData(bibleFor(lang).id).catch(() => null));
+  await Promise.all(jobs);
 }
 /** A note as formatted text in the outline. */
 function noteBlock(html) {
@@ -1553,8 +1643,8 @@ function renderOutline(list) {
   for (const it of list.items) {
     if (isNote(it)) { box.append(noteBlock(it.text)); continue; }
     const sec = el("div", "o-item");
-    sec.append(el("div", "o-ref", itemLabel(it)));
-    const paras = passageParas(it);
+    const { label, paras } = exportItem(it);
+    sec.append(el("div", "o-ref", label));
     if (!withTexts()) { /* the references and notes only */ }
     else if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
     else sec.append(el("p", "o-text", it.snippet || ""));
@@ -1566,8 +1656,8 @@ function outlineText(list) {
   const lines = [list.name || "Outline", ""];
   for (const it of list.items) {
     if (isNote(it)) { lines.push(noteText(it.text), ""); continue; }
-    lines.push(itemLabel(it));
-    const paras = passageParas(it);
+    const { label, paras } = exportItem(it);
+    lines.push(label);
     if (!withTexts()) { /* the references and notes only */ }
     else if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
     else if (it.snippet) lines.push(it.snippet);
@@ -1641,8 +1731,8 @@ function outlineDocx(list) {
   const paras = [{ style: "Title", runs: [{ text: list.name || "Outline" }] }];
   for (const it of list.items) {
     if (isNote(it)) { paras.push(...noteParas(it.text)); continue; }
-    paras.push({ style: "Reference", runs: [{ text: itemLabel(it) }] });
-    const texts = passageParas(it);
+    const { label, paras: texts } = exportItem(it);
+    paras.push({ style: "Reference", runs: [{ text: label }] });
     if (!withTexts()) { /* the references and notes only */ }
     else if (texts) for (const [n, t] of texts) paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F" } }, { text: t }] });
     else if (it.snippet) paras.push({ style: "Passage", runs: [{ text: it.snippet }] });
@@ -1655,7 +1745,7 @@ function outlineDocx(list) {
     `<w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>${extra}<w:pPr>${ppr}</w:pPr><w:rPr>${rpr}</w:rPr></w:style>`;
   const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles ${W}>` +
     '<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri" w:eastAsia="Calibri"/>' +
-    '<w:sz w:val="23"/><w:szCs w:val="23"/><w:lang w:val="nl-NL"/></w:rPr></w:rPrDefault>' +
+    `<w:sz w:val="23"/><w:szCs w:val="23"/><w:lang w:val="${{ nl: "nl-NL", en: "en-GB", fr: "fr-FR" }[exportLang() || bibleLang()]}"/></w:rPr></w:rPrDefault>` +
     '<w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
     '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
     style("Title", "Title", '<w:spacing w:after="240"/>', '<w:b/><w:color w:val="324158"/><w:sz w:val="48"/><w:szCs w:val="48"/>') +

@@ -350,7 +350,9 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .dialog .buttons.stacked button { width: 100%; min-height: 48px; }
 .dialog .error { color: var(--coral); font-weight: 600; min-height: 1.4em; }
 .dialog.wide { width: min(760px, 100%); }
-.o-texts { display: flex; gap: 8px; align-items: center; justify-content: flex-start; font-size: 14px; color: var(--muted); margin: -4px 0 8px; }
+.o-options { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin: -4px 0 8px; }
+.o-texts, .o-lang { display: flex; gap: 8px; align-items: center; justify-content: flex-start; font-size: 14px; color: var(--muted); }
+.dialog .o-lang select { width: auto; min-height: 32px; padding: 2px 8px; }
 .dialog .o-texts input { width: 20px; height: 20px; min-height: 0; flex: none; margin: 0; padding: 0; }
 .backup-row { text-align: left; }
 .backup-row .hint { display: block; font-weight: 400; margin: 2px 0 0; }
@@ -367,7 +369,7 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
   body.printing > *:not(#overlay) { display: none !important; }
   body.printing #overlay { position: static; background: none; padding: 0; display: block; }
   body.printing .dialog { box-shadow: none; width: auto; padding: 0; }
-  body.printing .dialog .buttons, body.printing .o-texts { display: none; }
+  body.printing .dialog .buttons, body.printing .o-options { display: none; }
   body.printing .outline { max-height: none; overflow: visible; }
 }
 
