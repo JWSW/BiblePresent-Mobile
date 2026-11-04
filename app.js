@@ -846,6 +846,8 @@ function openNoteEditor(s) {
   s.backMode = back;
   $("note-title").textContent = s.title;
   $("note-delete").classList.toggle("hidden", !!s.all);
+  for (const id of ["note-word", "note-pdf"]) $(id).classList.toggle("hidden", !s.all);
+  if (s.all && s.exportList) prepareExport(s.exportList());  // the Bible texts etc. ready for Word / PDF
   const body = $("note-body");
   body.innerHTML = "";
   body.classList.toggle("all", !!s.all);
@@ -1114,7 +1116,22 @@ function editListNote(it) {
 function openAllNotes() {
   const list = currentList();
   if (!list.items.length) return toast("The list is empty.");
-  openNoteEditor({ all: true, title: `All notes · ${list.name || "this list"}`, sessions: list.items.map((it) => listNote(it, list)) });
+  openNoteEditor({ all: true, title: `All notes · ${list.name || "this list"}`, sessions: list.items.map((it) => listNote(it, list)),
+                   exportList: () => list });
+}
+/** All notes as a Word document or a PDF: the references and the notes, without the texts. */
+function exportAllNotes(kind) {
+  if (!noteSession || !noteSession.exportList) return;
+  const list = noteSession.exportList();
+  if (kind === "pdf") {
+    showOutline(list, false);
+    window.print();  // the outline is on screen and is what gets printed (see @media print)
+    return;
+  }
+  textsOverride = false;
+  const file = outlineDocx(list);
+  textsOverride = null;
+  sendFile(file, list.name || "Notes");
 }
 function addFreeNote() {
   const it = { kind: "note", text: "" };
@@ -1329,7 +1346,8 @@ const HELP = [
     <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
     <li>A note opens on the left. Tap another note in the list to switch; <b>Done</b> closes it. An empty note is removed.</li>
-    <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).</li>
+    <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).
+        <b>Word</b> and <b>PDF</b> at the top make a document of it (the references and your notes; for the full texts too, use Outline).</li>
     <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it);
         <b>Aa</b> for the colour of the text and the font (Serif, Rounded, Typewriter, Handwriting); bullets, numbers and a checklist (tap the circle to tick it off).
         Select text first, or choose before you type.</li>
@@ -1358,7 +1376,7 @@ const HELP = [
     <ul><li>Everything is saved straight away, a note after every letter you type.</li>
     <li>Deleted notes, passages with a note and lists go to <b>⋯ → Recently deleted</b> for 30 days.</li>
     <li><b>Automatic backup on the laptop:</b> every time you connect, the laptop keeps a copy of all your lists and notes (the last 30).
-        <b>⋯ → Restore from the laptop</b> brings a backup back. The laptop needs Bible Present 1.7 or later.</li>
+        <b>⋯ → Restore from the laptop</b> brings a backup back. The laptop needs Bible Present 1.6.2 or later.</li>
     <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup file</b> adds the lists from such a file again (nothing is overwritten).
         If there has been no backup for two weeks, the app reminds you.</li>
     <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li></ul>`],
@@ -1523,9 +1541,10 @@ function passageParas(it) {
 }
 const sermonLang = (it) => it.lang || ((state.sermonIndex[it.code] || {}).nl ? "nl" : "en");
 
-function showOutline() {
-  const list = currentList();
+/** The outline of a list (the list being prepared, or the console's); texts: false = notes only (from All notes). */
+function showOutline(list = currentList(), texts = null) {
   if (!list.items.length) return toast("The list is empty.");
+  textsOverride = texts;
   showDialog(`<h2>${esc(list.name || "Outline")}</h2>
     <div class="o-options"><label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> With the Bible and sermon texts</label>
       <label class="o-lang">Language <select id="o-lang">${Object.entries(EXPORT_LANGS).map(([k, v]) =>
@@ -1535,7 +1554,10 @@ function showOutline() {
       <button id="o-share" class="ghost">Share</button><button id="o-close" class="primary">Close</button></div>`, (d) => {
     d.classList.add("wide");
     d.querySelector("#o-close").onclick = closeDialog;
-    d.querySelector("#o-texts").onchange = (e) => { store.set("outlineTexts", e.target.checked); renderOutline(list); };
+    d.querySelector("#o-texts").onchange = (e) => {
+      if (texts === null) store.set("outlineTexts", e.target.checked); else textsOverride = e.target.checked;
+      renderOutline(list);
+    };
     d.querySelector("#o-lang").onchange = (e) => {
       store.set("outlineLang", e.target.value);
       renderOutline(list);
@@ -1669,7 +1691,11 @@ function outlineText(list) {
   }
   return lines.join("\n").trim();
 }
-const withTexts = () => store.get("outlineTexts", true);
+let textsOverride = null;  // for the open outline: with or without the texts (null: as last time)
+function withTexts() {
+  if (textsOverride !== null) return textsOverride;
+  return store.get("outlineTexts", true);
+}
 
 // ---------------------------------------------------------------- the outline as a Word document (.docx)
 /* A .docx is a zip of a few XML files. Made here, without a library: titles and headings become
@@ -2068,7 +2094,7 @@ async function showLaptopBackups() {
   let backups;
   try {
     const res = await authGet("api/backups");
-    if (res.status === 404) return toast("This laptop needs Bible Present 1.7 or later for backups.");
+    if (res.status === 404) return toast("This laptop needs Bible Present 1.6.2 or later for backups.");
     backups = await res.json();
   } catch { return toast("The laptop does not answer."); }
   showDialog(`<h2>Backups on this laptop</h2>
@@ -2161,7 +2187,9 @@ function consoleNote(w) {
 const editConsoleNote = (w) => openNoteEditor(consoleNote(w));
 function openAllConsoleNotes() {
   if (!conn.remote) return;
-  openNoteEditor({ all: true, title: "All notes", sessions: weave(conn.remote.service, consolePlan()).map(consoleNote) });
+  openNoteEditor({ all: true, title: "All notes", sessions: weave(conn.remote.service, consolePlan()).map(consoleNote),
+                   exportList: () => ({ name: (conn.retList && conn.retList.name) || "Service list",
+                                        items: wovenItems(conn.remote.service, consolePlan()).map(fromPlan) }) });
 }
 
 function renderRemote() {
@@ -2404,7 +2432,9 @@ async function init() {
   $("remote-notes").onclick = openAllConsoleNotes;
   $("list-menu").onclick = showMenu;
   $("help-btn").onclick = showHelp;
-  $("list-outline").onclick = showOutline;
+  $("list-outline").onclick = () => showOutline();
+  $("note-word").onclick = () => exportAllNotes("word");
+  $("note-pdf").onclick = () => exportAllNotes("pdf");
   $("share-file").onclick = shareFile;
   $("share-text").onclick = shareText;
   $("connect-btn").onclick = connectDialog;
