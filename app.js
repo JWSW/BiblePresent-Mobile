@@ -153,11 +153,14 @@ const range = (v1, v2) => (v2 && v2 !== v1 ? `${v1}-${v2}` : `${v1}`);
 
 // ---------------------------------------------------------------- Bible
 const bibleCache = {};
+/* Bibles added from a file on this iPad (e.g. the HSV from the laptop): kept in this device's own
+   storage only, never uploaded or published. ownBibles: [{id, name, lang}]. */
+const OWN_BIBLES = "bp-own-bibles";  // the Cache Storage that holds them (kept across versions, see sw.js)
+const ownBibles = () => store.get("ownBibles", []);
 async function loadBible(id) {
   if (!bibleCache[id]) {
     $("verse-list").innerHTML = '<li class="info">Loading the Bible…</li>';
-    const res = await fetch(`data/${id}.json`);
-    bibleCache[id] = await res.json();
+    await loadBibleData(id);
   }
   state.bibleId = id;
   state.bible = bibleCache[id];
@@ -279,9 +282,11 @@ async function api(path) {
   if (!res.ok) throw new Error(`Message Hub: ${res.status}`);
   return res.json();
 }
+/** Message Hub's markup out of a paragraph: "@@" starts a Scripture line and "%#" / "%%" a song line
+    (both become a new line), "^^word^^" marks the KJV's italics, and a stray "\" is a typo in the source. */
 function cleanText(t) {
   return (t || "").replace(/[\u0002\u0003\u001f]/g, "").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ")
-    .replace(/\s*@@\s*/g, "\n").trim();
+    .replace(/\^\^/g, "").replace(/\\/g, "").replace(/\s*(@@|%[#%])\s*/g, "\n").replace(/ {2,}/g, " ").trim();
 }
 function sermonTitle(code, lang) {
   const info = state.sermonIndex[code] || {};
@@ -375,16 +380,34 @@ function markHtml(text, terms) {
   }
   return out + esc(text.slice(pos));
 }
+/** The same sermon in the other language (same paragraph numbers): Find in this sermon looks there too. */
+const otherLang = (lang) => (lang === "nl" ? "en" : "nl");
+function otherParas() {
+  const s = state.sermon, paras = s && paraCache[`${otherLang(s.lang)}/${s.code}`];
+  return paras ? new Map(paras) : null;
+}
+async function loadOtherLang(code, lang) {
+  const other = otherLang(lang), key = `${other}/${code}`;
+  if (paraCache[key] || !(state.sermonIndex[code] || {})[other]) return;
+  try {
+    const data = await api(`${other}/sermons/${code}/blocks`);
+    paraCache[key] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
+  } catch { return; }
+  if (state.sermon && state.sermon.code === code && $("para-find").value.trim()) applyParaFind();
+}
 function applyParaFind() {
   if (!state.sermon) return;
-  const terms = markTerms();
+  const terms = markTerms(), other = otherParas();
+  const otherTag = otherLang(state.sermon.lang).toUpperCase();
   let shown = 0, total = 0;
   for (const li of $("para-list").children) {
     if (!li.dataset.n) continue;
-    const text = li.dataset.text;
-    const ok = paraMatches(Number(li.dataset.n), text);
+    const text = li.dataset.text, n = Number(li.dataset.n);
+    let ok = paraMatches(n, text);
+    const there = !ok && other && other.has(n) && paraMatches(n, other.get(n));  // found in the other language
+    ok = ok || there;
     li.classList.toggle("hidden", !ok);
-    li.querySelector(".t").innerHTML = markHtml(text, terms);
+    li.querySelector(".t").innerHTML = markHtml(text, terms) + (there ? ` <span class="found-in">found in ${otherTag}</span>` : "");
     total++;
     shown += ok;
   }
@@ -462,6 +485,7 @@ async function openSermon(code, num, lang, searchText = null) {
     ol.appendChild(li);
   }
   applyParaFind();
+  loadOtherLang(code, lang);
   // a paragraph asked for by number must be visible
   if (num && ol.querySelector(`li[data-n="${num}"].hidden`)) { setField("para-find", ""); applyParaFind(); }
   paintSelection();
@@ -570,7 +594,8 @@ function renderHits() {
     l1.append(el("span", "code", `${code} ¶${q.blockNumber}`), el("span", "name", q.title), el("span", "tag", q.languageCode.toUpperCase()));
     const snip = el("div", "snippet");
     const safe = (q.blockText || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    snip.innerHTML = safe.replace(/\u0002/g, "<mark>").replace(/\u0003/g, "</mark>").replace(/[\u001f\r\n]+/g, " ").replace(/@@/g, " ");
+    snip.innerHTML = safe.replace(/\u0002/g, "<mark>").replace(/\u0003/g, "</mark>").replace(/[\u001f\r\n]+/g, " ")
+      .replace(/@@|%[#%]/g, " ").replace(/\^\^|\\/g, "");
     li.append(l1, snip);
     li.onclick = () => {
       for (const x of ul.querySelectorAll("li.active")) x.classList.remove("active");
@@ -1295,6 +1320,8 @@ function showMenu() {
       <button id="m-backup">Back up all lists and notes</button>
       <button id="m-restore">Restore from a backup file…</button>
       <button id="m-laptop">Restore from the laptop…</button>
+      <button id="m-bible">Add a Bible from a file…</button>
+      ${ownBibles().map((b) => `<button class="m-own" data-id="${esc(b.id)}">Remove ${esc(b.id)} (${esc(b.name)}) from this iPad</button>`).join("")}
       <button id="m-help">Help</button>
     </div>
     <p class="hint">Last backup file: ${last ? ago(last) : "never"} (save it in Files or iCloud Drive).<br>
@@ -1310,6 +1337,8 @@ function showMenu() {
     d.querySelector("#m-backup").onclick = () => { closeDialog(); backupLists(); };
     d.querySelector("#m-restore").onclick = restoreBackup;
     d.querySelector("#m-laptop").onclick = () => connectDialog(true);
+    d.querySelector("#m-bible").onclick = addBibleFromFile;
+    for (const b of d.querySelectorAll(".m-own")) b.onclick = () => removeOwnBible(b.dataset.id);
     d.querySelector("#m-help").onclick = showHelp;
     d.querySelector("#m-close").onclick = closeDialog;
   });
@@ -1325,14 +1354,18 @@ const HELP = [
   ["Finding Bible verses", `
     <ul><li>Choose a book, a chapter and a verse. Tap a second verse to select the verses in between; tap the selected verse again to clear it.</li>
     <li>Or type in <b>Go to…</b>: <code>joh 3:16-18</code>, <code>ps 23</code>, <code>1 kor 13</code>. Dutch, English and French book names work.</li>
-    <li>The box next to it switches the Bible (SV, KJV, LSG). That is only for reading on the iPad.</li></ul>
+    <li>The box next to it switches the Bible (SV, KJV, LSG). That is only for reading on the iPad.</li>
+    <li><b>Another Bible, e.g. the HSV:</b> ⋯ → <b>Add a Bible from a file…</b> and choose the Bible's file. The laptop has it:
+        <code>%APPDATA%\\BiblePresent\\bibles\\HSV.json</code>; put it on the iPad via iCloud Drive, OneDrive or mail.
+        It stays on this iPad only and is never uploaded.</li></ul>
     <p class="note-box"><b>Two languages on the screen?</b> That happens on the laptop, by itself: Bible Present shows every passage
        in the laptop's two Bibles (for example Dutch on top, English below), whichever Bible you read on the iPad.
        They are chosen on the laptop: Settings → Presentation → Top half / Bottom half → Bible.</p>`],
   ["Sermon quotes", `
     <ul><li><b>Find sermon</b>: a code (<code>56-0401M</code>), words from the title or the place. The year box shows one year.</li>
     <li><b>Search the text</b> of all sermons and tap a result to open the sermon at that paragraph. The words are marked.</li>
-    <li><b>Find in this sermon</b>: words or a paragraph number (<code>14</code>).</li>
+    <li><b>Find in this sermon</b>: words or a paragraph number (<code>14</code>). It also looks in the other language:
+        English words find the paragraph while you read Dutch (marked “found in EN”), and the other way round.</li>
     <li>NL / EN above the paragraphs switches the language you read on the iPad. Tap paragraphs to select them, like verses.</li></ul>
     <p class="note-box">On the screen the laptop shows the paragraph in its own two languages, whichever language you read here
        (Settings → App → Sermons on the laptop). Paragraph numbers are the same in every language.</p>`],
@@ -1603,10 +1636,50 @@ async function loadVerseTables() {
     verseTables = { eng: d.eng, org: d.org, engToOrg, orgToEng };
   } catch { verseTables = { eng: [], org: [], engToOrg: new Map(), orgToEng: new Map() }; }  // then: the same numbers
 }
-const bibleFor = (lang) => BIBLES.find((b) => b.lang === lang);
+/** The Bible to export in a language: the one in use when it is in that language (e.g. the HSV), else the first. */
+const bibleFor = (lang) => (bibleLang() === lang && BIBLES.find((b) => b.id === state.bibleId)) || BIBLES.find((b) => b.lang === lang);
 async function loadBibleData(id) {
-  if (!bibleCache[id]) bibleCache[id] = await (await fetch(`data/${id}.json`)).json();
+  if (!bibleCache[id]) {
+    const own = !conn.info && ownBibles().some((b) => b.id === id);
+    const res = own ? await (await caches.open(OWN_BIBLES)).match(`own/${id}.json`) : await fetch(`data/${id}.json`);
+    if (!res) throw new Error(`Bible ${id} is not on this device`);
+    bibleCache[id] = await res.json();
+  }
   return bibleCache[id];
+}
+
+/** A Bible from a file (the laptop's format: {id, name, language, books}), kept on this device only. */
+function addBibleFromFile() {
+  const input = el("input");
+  input.type = "file";
+  input.accept = ".json,application/json";
+  input.onchange = async () => {
+    const f = input.files[0];
+    if (!f) return;
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { return toast("That file is not a Bible (JSON)."); }
+    const ok = data && Array.isArray(data.books) && data.books.length === 66 &&
+      data.books.every((b) => Array.isArray(b) && b.every((c) => Array.isArray(c)));
+    if (!ok) return toast("That file is not a Bible in Bible Present's format.");
+    const id = String(data.id || f.name.replace(/\.json$/i, "")).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
+    if (!id || ["SV", "KJV", "LSG"].includes(id.toUpperCase())) return toast(`${id || "This Bible"} is already in the app.`);
+    const lang = NAMES[data.language] ? data.language : "nl";
+    const body = JSON.stringify({ id, name: String(data.name || id), language: lang, books: data.books });
+    await (await caches.open(OWN_BIBLES)).put(`own/${id}.json`, new Response(body, { headers: { "Content-Type": "application/json" } }));
+    store.set("ownBibles", [...ownBibles().filter((b) => b.id !== id), { id, name: String(data.name || id), lang }]);
+    delete bibleCache[id];
+    closeDialog();
+    toast(`${id} added. Choose it in the box next to Go to…`);
+    setTimeout(() => location.reload(), 1200);  // the Bible box is filled at the start
+  };
+  input.click();
+}
+async function removeOwnBible(id) {
+  if (!confirm(`Remove ${id} from this iPad? You can add it again from the file.`)) return;
+  await (await caches.open(OWN_BIBLES)).delete(`own/${id}.json`);
+  store.set("ownBibles", ownBibles().filter((b) => b.id !== id));
+  if (state.bibleId === id) store.set("bible", "SV");
+  location.reload();
 }
 /** Does this Bible number this chapter the English way ("eng"), the original way ("org"), or are they the same? */
 function numbering(bible, b, c) {
@@ -2385,8 +2458,8 @@ async function init() {
   const laptop = await detectLaptop();  // opened from a laptop running Bible Present?
   if (laptop && laptop.bibles && laptop.bibles.length) {
     BIBLES = laptop.bibles.map((b) => ({ id: b.id, name: b.name, lang: NAMES[b.lang] ? b.lang : "en" }));
-    if (!BIBLES.find((b) => b.id === state.bibleId)) state.bibleId = BIBLES[0].id;
-  }
+  } else if (!laptop) BIBLES = [...BIBLES, ...ownBibles()];
+  if (!BIBLES.find((b) => b.id === state.bibleId)) state.bibleId = BIBLES[0].id;
   const bs = $("bible-select");
   for (const b of BIBLES) { const o = el("option", "", b.id); o.value = b.id; o.title = b.name; bs.appendChild(o); }
   bs.value = state.bibleId;

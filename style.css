@@ -94,6 +94,8 @@ button.small { min-height: 36px; padding: 6px 12px; }
 input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; display: none; }
 .para-find-row { align-items: center; }
 .count-hint { flex: none; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.found-in { display: inline-block; font-size: 11px; font-weight: 700; color: var(--blue); border: 1px solid var(--blue);
+            border-radius: 6px; padding: 0 5px; margin-left: 4px; vertical-align: 1px; white-space: nowrap; }
 /* words found by "Find in this sermon" or the text search, inside the paragraphs */
 .items mark { background: rgba(227, 129, 95, .28); color: inherit; font-weight: 700; border-radius: 3px;
               padding: 0 1px; }
