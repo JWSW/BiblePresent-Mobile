@@ -1355,12 +1355,24 @@ const HELP = [
     <ul><li>Choose a book, a chapter and a verse. Tap a second verse to select the verses in between; tap the selected verse again to clear it.</li>
     <li>Or type in <b>Go to…</b>: <code>joh 3:16-18</code>, <code>ps 23</code>, <code>1 kor 13</code>. Dutch, English and French book names work.</li>
     <li>The box next to it switches the Bible (SV, KJV, LSG). That is only for reading on the iPad.</li>
-    <li><b>Another Bible, e.g. the HSV:</b> ⋯ → <b>Add a Bible from a file…</b> and choose the Bible's file. The laptop has it:
-        <code>%APPDATA%\\BiblePresent\\bibles\\HSV.json</code>; put it on the iPad via iCloud Drive, OneDrive or mail.
-        It stays on this iPad only and is never uploaded.</li></ul>
+    <li>Another Bible, such as the HSV, can be added: see <i>Adding a Bible (e.g. the HSV)</i> below.</li></ul>
     <p class="note-box"><b>Two languages on the screen?</b> That happens on the laptop, by itself: Bible Present shows every passage
        in the laptop's two Bibles (for example Dutch on top, English below), whichever Bible you read on the iPad.
        They are chosen on the laptop: Settings → Presentation → Top half / Bottom half → Bible.</p>`],
+  ["Adding a Bible (e.g. the HSV)", `
+    <p>SV, KJV and LSG are built in. A Bible you have as a file (for example the HSV) can be added to this iPad.
+       It stays on this iPad only: it is never uploaded or shared.</p>
+    <ol><li><b>Put the file on the iPad.</b> That is the Bible file you have (an <code>.xml</code> file, e.g. <i>HSV.xml</i>).
+        If it was added to Bible Present on the laptop, the laptop also has a copy: in Windows Explorer, type
+        <code>%APPDATA%\\BiblePresent\\bibles</code> in the address bar and press Enter; the file is <i>HSV.json</i>.
+        To get it on the iPad, the easiest way is to <b>mail it to yourself</b>: open the mail on the iPad, tap and hold the attachment,
+        then <b>Save to Files</b>. iCloud Drive or OneDrive work too.</li>
+    <li>In Bible Present, tap <b>⋯</b> at the top of the list (next to <i>Delete</i>) → <b>Add a Bible from a file…</b></li>
+    <li>Find the file (in <i>Downloads</i>, <i>iCloud Drive</i> or <i>On My iPad</i>; <b>Browse</b> at the bottom shows all places) and tap it.</li>
+    <li>Check the short name (e.g. <b>HSV</b>), the full name and the language, and tap <b>Add</b>.</li>
+    <li>The app opens again with the new Bible. The box next to <i>Go to…</i> switches between the Bibles.</li></ol>
+    <p>Each iPad needs it added once. To remove it: ⋯ → <b>Remove … from this iPad</b>.
+       Connected to the laptop, the console uses the laptop's Bibles anyway.</p>`],
   ["Sermon quotes", `
     <ul><li><b>Find sermon</b>: a code (<code>56-0401M</code>), words from the title or the place. The year box shows one year.</li>
     <li><b>Search the text</b> of all sermons and tap a result to open the sermon at that paragraph. The words are marked.</li>
@@ -1648,31 +1660,115 @@ async function loadBibleData(id) {
   return bibleCache[id];
 }
 
-/** A Bible from a file (the laptop's format: {id, name, language, books}), kept on this device only. */
+/* Reading a Bible file, as the laptop does (bible_data.py): its own JSON, Zefania XML, and XML laid out
+   as <bible>/<book number>/<chapter number>/<verse number>. Result: 66 books x chapters x verses. */
+function cleanVerse(t) {
+  return String(t).replace(/\]\s*\[\([^)]*\)\s*/g, " ").replace(/[[\]¶]/g, "").replace(/[֐-׿]/g, "")
+    .replace(/\s+/g, " ").trim();
+}
+function putVerse(books, b, c, v, text) {
+  if (!(b >= 0 && b < 66 && c > 0 && v > 0)) return;
+  const chapters = books[b];
+  while (chapters.length < c) chapters.push([]);
+  const verses = chapters[c - 1];
+  while (verses.length < v) verses.push("");
+  verses[v - 1] = cleanVerse(text);
+}
+const LANG_CODES = { nl: "nl", nld: "nl", dut: "nl", dutch: "nl", nederlands: "nl", en: "en", eng: "en", english: "en",
+                     fr: "fr", fra: "fr", fre: "fr", french: "fr", "français": "fr", francais: "fr" };
+function bibleFromXml(text) {
+  const doc = new DOMParser().parseFromString(text, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("This file is not valid XML.");
+  const books = Array.from({ length: 66 }, () => []);
+  const tag = (el, name) => [...el.getElementsByTagName(name)];
+  const meta = (name) => { const x = doc.getElementsByTagName(name)[0]; return x ? x.textContent.trim() : ""; };
+  let info;
+  if (doc.getElementsByTagName("BIBLEBOOK").length) {  // Zefania
+    for (const bk of tag(doc, "BIBLEBOOK")) {
+      const b = Number(bk.getAttribute("bnumber")) - 1;
+      for (const ch of tag(bk, "CHAPTER")) {
+        const c = Number(ch.getAttribute("cnumber"));
+        for (const vs of tag(ch, "VERS")) {
+          // verses squeezed into the previous one: "... [ (Psalms 3:9) Het heil ... ]" are split out again
+          const pieces = vs.textContent.split(/\[\s*\([^)]*?\s+\d+:(\d+)\)/);
+          putVerse(books, b, c, Number(vs.getAttribute("vnumber")), pieces[0]);
+          for (let i = 1; i < pieces.length; i += 2) putVerse(books, b, c, Number(pieces[i]), pieces[i + 1]);
+        }
+      }
+    }
+    info = { id: meta("identifier"), name: meta("title") || doc.documentElement.getAttribute("biblename"), lang: meta("language") };
+  } else if (tag(doc, "book").some((x) => x.hasAttribute("number"))) {
+    for (const bk of tag(doc, "book")) {
+      const b = Number(bk.getAttribute("number")) - 1;
+      for (const ch of tag(bk, "chapter")) {
+        for (const vs of tag(ch, "verse")) putVerse(books, b, Number(ch.getAttribute("number")), Number(vs.getAttribute("number")), vs.textContent);
+      }
+    }
+    const root = doc.documentElement;
+    info = { id: root.getAttribute("abbreviation") || root.getAttribute("id"), name: root.getAttribute("translation") || root.getAttribute("name"),
+             lang: root.getAttribute("language") || root.getAttribute("lang") };
+  } else {
+    throw new Error("This XML layout is not supported. Supported: Zefania XML, and <bible>/<book number>/<chapter number>/<verse number>.");
+  }
+  return { books, ...info };
+}
+function bibleFromJson(text) {
+  const data = JSON.parse(text);
+  const ok = data && Array.isArray(data.books) && data.books.length === 66 &&
+    data.books.every((b) => Array.isArray(b) && b.every((c) => Array.isArray(c)));
+  if (!ok) throw new Error("This JSON file is not a Bible in Bible Present's format.");
+  return { books: data.books, id: data.id, name: data.name, lang: data.language };
+}
+
+/** A Bible from a file (XML, or the laptop's JSON), kept on this device only. */
 function addBibleFromFile() {
   const input = el("input");
   input.type = "file";
-  input.accept = ".json,application/json";
+  input.accept = ".xml,.json,application/xml,text/xml,application/json";
   input.onchange = async () => {
     const f = input.files[0];
     if (!f) return;
-    let data;
-    try { data = JSON.parse(await f.text()); } catch { return toast("That file is not a Bible (JSON)."); }
-    const ok = data && Array.isArray(data.books) && data.books.length === 66 &&
-      data.books.every((b) => Array.isArray(b) && b.every((c) => Array.isArray(c)));
-    if (!ok) return toast("That file is not a Bible in Bible Present's format.");
-    const id = String(data.id || f.name.replace(/\.json$/i, "")).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 16);
-    if (!id || ["SV", "KJV", "LSG"].includes(id.toUpperCase())) return toast(`${id || "This Bible"} is already in the app.`);
-    const lang = NAMES[data.language] ? data.language : "nl";
-    const body = JSON.stringify({ id, name: String(data.name || id), language: lang, books: data.books });
-    await (await caches.open(OWN_BIBLES)).put(`own/${id}.json`, new Response(body, { headers: { "Content-Type": "application/json" } }));
-    store.set("ownBibles", [...ownBibles().filter((b) => b.id !== id), { id, name: String(data.name || id), lang }]);
-    delete bibleCache[id];
-    closeDialog();
-    toast(`${id} added. Choose it in the box next to Go to…`);
-    setTimeout(() => location.reload(), 1200);  // the Bible box is filled at the start
+    let bible;
+    try {
+      const text = await f.text();
+      bible = /^\s*</.test(text) ? bibleFromXml(text) : bibleFromJson(text);
+    } catch (e) { return showDialog(`<h2>Could not read this file</h2><p>${esc(e.message || "Unknown file type.")}</p>
+      <div class="buttons"><button class="primary" id="x-ok">OK</button></div>`, (d) => { d.querySelector("#x-ok").onclick = closeDialog; }); }
+    const verses = bible.books.reduce((s, b) => s + b.reduce((t, c) => t + c.filter(Boolean).length, 0), 0);
+    if (!verses) return toast("No verses found in this file.");
+    confirmOwnBible(bible, f.name, verses);
   };
   input.click();
+}
+/** Check the short name, the full name and the language, then keep the Bible. */
+function confirmOwnBible(bible, fileName, verses) {
+  const guess = String(bible.id || fileName.replace(/\.(xml|json)$/i, "")).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12).toUpperCase();
+  const lang = LANG_CODES[String(bible.lang || "").toLowerCase()] || "nl";
+  showDialog(`<h2>Add a Bible</h2>
+    <p>${verses.toLocaleString()} verses found in “${esc(fileName)}”. It is kept on this iPad only.</p>
+    <label class="field">Short name (shown in the Bible box)<input id="ob-id" type="text" maxlength="12" autocapitalize="characters" value="${esc(guess)}"></label>
+    <label class="field">Full name<input id="ob-name" type="text" value="${esc(bible.name || guess)}"></label>
+    <label class="field">Language (for the book names)<select id="ob-lang">${["nl", "en", "fr"].map((l) =>
+      `<option value="${l}" ${l === lang ? "selected" : ""}>${EXPORT_LANGS[l]}</option>`).join("")}</select></label>
+    <div class="error" id="ob-err"></div>
+    <div class="buttons"><button id="ob-cancel" class="ghost">Cancel</button><button id="ob-add" class="primary">Add</button></div>`, (d) => {
+    d.querySelector("#ob-cancel").onclick = closeDialog;
+    d.querySelector("#ob-add").onclick = async () => {
+      const id = d.querySelector("#ob-id").value.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 12);
+      const name = d.querySelector("#ob-name").value.trim() || id;
+      const lng = d.querySelector("#ob-lang").value;
+      if (!id) { d.querySelector("#ob-err").textContent = "Give it a short name, e.g. HSV."; return; }
+      if (["SV", "KJV", "LSG"].includes(id.toUpperCase())) { d.querySelector("#ob-err").textContent = `${id} is already in the app; choose another short name.`; return; }
+      const body = JSON.stringify({ id, name, language: lng, books: bible.books });
+      await (await caches.open(OWN_BIBLES)).put(`own/${id}.json`, new Response(body, { headers: { "Content-Type": "application/json" } }));
+      store.set("ownBibles", [...ownBibles().filter((b) => b.id !== id), { id, name, lang: lng }]);
+      store.set("bible", id);  // use it straight away
+      delete bibleCache[id];
+      closeDialog();
+      toast(`${id} added`);
+      setTimeout(() => location.reload(), 1000);  // the Bible box is filled at the start
+    };
+  });
 }
 async function removeOwnBible(id) {
   if (!confirm(`Remove ${id} from this iPad? You can add it again from the file.`)) return;

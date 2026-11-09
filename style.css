@@ -351,6 +351,8 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .dialog .buttons.stacked { flex-direction: column-reverse; align-items: stretch; }
 .dialog .buttons.stacked button { width: 100%; min-height: 48px; }
 .dialog .error { color: var(--coral); font-weight: 600; min-height: 1.4em; }
+.dialog .field { display: block; font-size: 13px; font-weight: 700; color: var(--muted); }
+.dialog .field input, .dialog .field select { display: block; width: 100%; margin: 4px 0 10px; font-weight: 400; }
 .dialog.wide { width: min(760px, 100%); }
 .o-options { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; margin: -4px 0 8px; }
 .o-texts, .o-lang { display: flex; gap: 8px; align-items: center; justify-content: flex-start; font-size: 14px; color: var(--muted); }
