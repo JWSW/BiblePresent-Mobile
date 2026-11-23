@@ -679,7 +679,7 @@ function renderList() {
       fillSnippet(it);
     }
     const li = el("li", isNote(it) ? "note" : "");
-    li.classList.toggle("editing", !!noteSession && noteSession.target === it);
+    li.classList.toggle("editing", (!!noteSession && noteSession.target === it) || (!!fmtSession && fmtSession.item === it));
     const grip = el("span", "grip", "⠿");
     grip.title = "Drag to change the order";
     grip.addEventListener("pointerdown", (e) => startDrag(e, li, grip, (from, to) => {
@@ -696,6 +696,7 @@ function renderList() {
       body.append(el("div", "label", itemLabel(it)), el("div", "snip", itemSnippet(it)));
       if (it.note) body.append(noteLine(it.note, () => editListNote(it)));
       body.onclick = () => showItem(it);
+      buttons.push(formatButton(it, () => openFormat({ item: it, save: (fmt) => { setFmt(it, fmt); saveLists(); renderList(); } })));
       const edit = el("button", "del note-btn", "✎");
       edit.title = "Note on this passage";
       edit.onclick = () => editListNote(it);
@@ -716,6 +717,173 @@ function renderList() {
   $("mode-count").textContent = num || "";
   renderLists();
 }
+// ---------------------------------------------------------------- formatting the text on the screen
+/* Bold, italic, underline and colours for the text of one list item, as it will be shown on the
+   laptop's screen (screen_format.py there). it.fmt = {src: Bible id or sermon language,
+   units: {"3:16" or "14": html}}; the html only has <b> <i> <u> <span class="s-yellow"> <br>.
+   Only the formatting changes, never the words, so the laptop shows it only on that same text. */
+const SCREEN_COLORS = { yellow: "#FFD60A", orange: "#FF9F0A", red: "#FF453A", green: "#30D158", blue: "#64D2FF", purple: "#BF5AF2" };
+const setFmt = (it, fmt) => { if (fmt) it.fmt = fmt; else delete it.fmt; };
+function formatButton(it, onClick) {
+  const b = el("button", "del fmt-btn" + (it.fmt ? " on" : ""), "Aa");
+  b.title = "Format the text on the screen (bold, underline, colour)";
+  b.onclick = onClick;
+  return b;
+}
+/** Segments [text, bold, italic, underline, colour] of html: the stored form, or what the editor made. */
+function fmtSegments(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const segs = [];
+  const add = (text, f) => {
+    if (!text) return;
+    const last = segs[segs.length - 1];
+    if (last && last[1] === !!f.b && last[2] === !!f.i && last[3] === !!f.u && last[4] === (f.c || null)) last[0] += text;
+    else segs.push([text, !!f.b, !!f.i, !!f.u, f.c || null]);
+  };
+  const walk = (n, f, top) => {
+    n.childNodes.forEach((c, idx) => {
+      if (c.nodeType === 3) return add(c.data.replace(/ /g, " "), f);
+      if (c.nodeType !== 1) return;
+      if (c.tagName === "BR") return add("\n", f);
+      const g = { ...f }, st = c.style || {};
+      if (/^(B|STRONG)$/.test(c.tagName) || Number(st.fontWeight) >= 600 || st.fontWeight === "bold") g.b = true;
+      if (/^(I|EM)$/.test(c.tagName) || st.fontStyle === "italic") g.i = true;
+      if (c.tagName === "U" || /underline/.test(st.textDecoration || st.textDecorationLine || "")) g.u = true;
+      const cls = (c.className || "").match && (c.className.match(/\bs-(\w+)/) || [])[1];
+      if (cls && SCREEN_COLORS[cls]) g.c = cls;
+      const col = c.style && c.style.color ? screenColorName(c.style.color) : undefined;
+      if (col !== undefined) g.c = col;
+      if (top && idx > 0 && /^(DIV|P)$/.test(c.tagName)) add("\n", f);  // a new line made by the editor
+      walk(c, g, false);
+    });
+  };
+  walk(t.content, {}, true);
+  return segs;
+}
+/** A css colour → one of the screen colours, null for white/the normal colour (undefined: not a colour). */
+function screenColorName(css) {
+  const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(css);
+  if (!m) return undefined;
+  const hex = "#" + [m[1], m[2], m[3]].map((x) => Number(x).toString(16).padStart(2, "0")).join("").toUpperCase();
+  return Object.keys(SCREEN_COLORS).find((k) => SCREEN_COLORS[k] === hex) || null;
+}
+function fmtHtml(segs, forEditor) {
+  return segs.map(([text, b, i, u, c]) => {
+    let t = esc(text).replace(/\n/g, "<br>");
+    if (u) t = `<u>${t}</u>`;
+    if (i) t = `<i>${t}</i>`;
+    if (b) t = `<b>${t}</b>`;
+    if (c) t = forEditor ? `<span style="color:${SCREEN_COLORS[c]}">${t}</span>` : `<span class="s-${c}">${t}</span>`;
+    return t;
+  }).join("");
+}
+const fmtPlain = (segs) => segs.map((s) => s[0]).join("");
+const fmtFormatted = (segs) => segs.some((s) => s[1] || s[2] || s[3] || s[4]);
+const normWs = (t) => String(t).split(/\s+/).filter(Boolean).join(" ");
+/** {src, title, hint, units: [[key, label, text]]} of an item: what is formatted (this device's Bible / the sermon language). */
+function fmtSource(it) {
+  if (it.kind === "sermon") {
+    const lang = it.lang || sermonLang(it), paras = paraCache[`${lang}/${it.code}`];
+    if (!paras) return null;
+    const units = paras.filter(([n]) => n >= it.v1 && n <= (it.v2 || it.v1)).map(([n, t]) => [String(n), `¶${n}`, t]);
+    return { src: lang, units, hint: `Shown on the laptop when the screen shows the ${lang === "nl" ? "Dutch" : lang === "en" ? "English" : lang.toUpperCase()} text of this sermon.` };
+  }
+  const units = [];
+  for (let v = it.v1; v <= (it.v2 || it.v1); v++) { const t = verseText(it.b, it.c, v); if (t) units.push([`${it.c}:${v}`, String(v), t]); }
+  return { src: state.bibleId, units, hint: `Shown on the laptop when its screen shows the ${state.bibleId} (Settings → Presentation → the top half's Bible).` };
+}
+
+/** The format pane over the left side: s = {item, label, save(fmt)}. */
+let fmtSession = null;
+async function openFormat(s) {
+  const it = s.item;
+  if (it.kind === "sermon" && !paraCache[`${it.lang || sermonLang(it)}/${it.code}`]) {
+    toast("Loading the sermon…");
+    await loadSermonParas(it, it.lang || sermonLang(it));
+  }
+  const source = fmtSource(it);
+  if (!source || !source.units.length) return toast("The text of this item is not here (offline?).");
+  const back = noteSession ? noteSession.backMode : fmtSession ? fmtSession.backMode : $("layout").dataset.mode;
+  closeNoteEditor(true);
+  closeFormat(true);
+  fmtSession = { ...s, source, backMode: back };
+  $("fmt-title").textContent = `Format · ${s.label || itemLabel(it)}`;
+  let hint = source.hint;
+  if (it.fmt && it.fmt.src !== source.src) hint += ` This item was formatted in ${it.fmt.src}; changes here replace that.`;
+  $("fmt-hint").textContent = hint;
+  const body = $("fmt-body");
+  body.innerHTML = "";
+  const own = it.fmt && it.fmt.src === source.src ? it.fmt.units : {};
+  for (const [key, label, text] of source.units) {
+    const row = el("div", "fmt-unit");
+    const ed = el("div", "fmt-text");
+    ed.contentEditable = "true";
+    ed.setAttribute("inputmode", "none");  // no keyboard: only selecting and formatting
+    ed.spellcheck = false;
+    const segs = own[key] ? fmtSegments(own[key]) : null;
+    ed.innerHTML = segs && normWs(fmtPlain(segs)) === normWs(text) ? fmtHtml(segs, true) : esc(text).replace(/\n/g, "<br>");
+    ed._unit = { key, text };
+    row.append(el("span", "fmt-n", label), ed);
+    body.append(row);
+  }
+  $("fmt-pane").classList.remove("hidden");
+  $("fmt-colors").classList.add("hidden");
+  setMode("browse");  // phones: the pane is on the left side
+  renderList();       // marks the item that is open
+}
+function fmtResult() {
+  const units = {};
+  for (const ed of $("fmt-body").querySelectorAll(".fmt-text")) {
+    const segs = fmtSegments(ed.innerHTML);
+    if (fmtFormatted(segs) && normWs(fmtPlain(segs)) === normWs(ed._unit.text)) units[ed._unit.key] = fmtHtml(segs, false);
+  }
+  return Object.keys(units).length ? { src: fmtSession.source.src, units } : null;
+}
+function saveFormat() {
+  if (fmtSession) fmtSession.save(fmtResult());
+}
+function closeFormat(switching) {
+  const s = fmtSession;
+  if (!s) return;
+  saveFormat();
+  fmtSession = null;
+  $("fmt-pane").classList.add("hidden");
+  $("fmt-body").innerHTML = "";
+  if (!switching) { setMode(s.backMode || "browse"); renderList(); }
+}
+function initFormatPane() {
+  const body = $("fmt-body");
+  // only formatting: typing, deleting, pasting and dropping are not let through
+  body.addEventListener("beforeinput", (e) => {
+    if (!/^(format|history)/.test(e.inputType)) e.preventDefault();
+  });
+  body.addEventListener("paste", (e) => e.preventDefault());
+  body.addEventListener("drop", (e) => e.preventDefault());
+  body.addEventListener("input", saveFormat);
+  for (const b of $("fmt-tools").querySelectorAll("button")) {
+    b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the selection
+    b.onclick = () => {
+      if (b.dataset.cmd === "colors") { $("fmt-colors").classList.toggle("hidden"); return; }
+      const sel = getSelection();
+      if (!sel.rangeCount || sel.isCollapsed || !body.contains(sel.anchorNode)) return toast("Select words first.");
+      if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
+      else {
+        document.execCommand("styleWithCSS", false, true);
+        document.execCommand("foreColor", false, b.dataset.color ? SCREEN_COLORS[b.dataset.color] : "#FFFFFF");
+        document.execCommand("styleWithCSS", false, false);
+      }
+      saveFormat();
+    };
+  }
+  $("fmt-clear").onclick = () => {
+    if (!confirm("Remove all formatting of this item?")) return;
+    for (const ed of body.querySelectorAll(".fmt-text")) ed.innerHTML = esc(ed._unit.text).replace(/\n/g, "<br>");
+    saveFormat();
+  };
+  $("fmt-done").onclick = () => closeFormat();
+}
+
 /** The note on a passage, shown under it; tapping it opens the note. */
 function noteLine(html, onEdit) {
   const line = el("div", "att-note", noteText(html));
@@ -866,6 +1034,7 @@ function makeEditor(n) {
 const markEmpty = (ed) => ed.classList.toggle("empty", !noteText(ed.innerHTML));
 function openNoteEditor(s) {
   const back = noteSession ? noteSession.backMode : $("layout").dataset.mode;
+  closeFormat(true);
   closeNoteEditor(true);
   noteSession = s;
   s.backMode = back;
@@ -1387,6 +1556,19 @@ const HELP = [
     <li>The list box at the top switches between lists; <b>New list</b> starts one.</li></ul>
     <img class="help-anim" data-src="help/add-passage.webp" alt="Selecting John 3:16 to 18 and adding it to the list">
     <img class="help-anim" data-src="help/reorder.webp" alt="Dragging Psalm 23:4 higher up in the list">`],
+  ["Formatting the text on the screen", `
+    <p>Make words of a verse or sermon quote <b>bold</b>, <i>italic</i>, <u>underlined</u> or coloured on the laptop's screen,
+       only for that item in the list.</p>
+    <ul><li>Tap <b>Aa</b> on the item. Its text opens on the left, as on the screen (light on dark).</li>
+    <li>Select words (tap and hold, then drag the handles) and tap <b>B</b>, <b>I</b>, <b>U</b> or <b>Colour</b>. Tap again to undo it;
+        <b>Clear all</b> removes all formatting of the item.</li>
+    <li>Only the formatting can be changed, not the words.</li>
+    <li>It goes along to the laptop with the list. The laptop shows it when that item is presented from the service list,
+        on the same text: the same Bible (for verses, the top half's Bible, e.g. HSV), or the same sermon language.
+        So format verses in the Bible the laptop shows.</li>
+    <li>In the console, <b>Aa</b> on an item of the laptop's service list changes it on the laptop right away.
+        On the laptop itself: right-click an item in the service list → <b>Format text…</b></li>
+    <li><b>Aa</b> in blue: the item has formatting.</li></ul>`],
   ["Notes", `
     <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
@@ -2052,10 +2234,11 @@ function addFromText(p) {
 const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const b64enc = (obj) => btoa(unescape(encodeURIComponent(JSON.stringify(obj)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const b64dec = (s) => JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))));
-const toService = (it) => it.kind === "sermon" ? { kind: "sermon", code: it.code, v1: it.v1, v2: it.v2 }
-                                               : { kind: "bible", b: it.b, c: it.c, v1: it.v1, v2: it.v2 };
-const fromService = (d) => d.kind === "sermon" ? { kind: "sermon", code: d.code, v1: d.v1, v2: d.v2 }
-                                               : { kind: "bible", b: d.b, c: d.c, v1: d.v1, v2: d.v2 };
+const withFmt = (d, fmt) => (fmt ? { ...d, fmt } : d);  // the formatting for the screen travels along
+const toService = (it) => withFmt(it.kind === "sermon" ? { kind: "sermon", code: it.code, v1: it.v1, v2: it.v2 }
+                                                       : { kind: "bible", b: it.b, c: it.c, v1: it.v1, v2: it.v2 }, it.fmt);
+const fromService = (d) => withFmt(d.kind === "sermon" ? { kind: "sermon", code: d.code, v1: d.v1, v2: d.v2 }
+                                                       : { kind: "bible", b: d.b, c: d.c, v1: d.v1, v2: d.v2 }, d.fmt);
 /** A list item with its notes (what travels to the console and back). */
 const toPlan = (it) => (isNote(it) ? { kind: "note", text: it.text || "" } : withNote(toService(it), it.note));
 const fromPlan = (d) => (isNote(d) ? { kind: "note", text: d.text || "" } : withNote(fromService(d), d.note));
@@ -2089,8 +2272,10 @@ function weave(service, plan) {
   return out;
 }
 /** The woven list as list items again (a note whose passage is gone becomes a free note). */
+// The laptop's formatting of an item wins; a laptop up to 1.6.2 does not know formatting (no "fmt" at all):
+// then the item keeps the one it had in the list.
 const wovenItems = (service, plan) => weave(service, plan).map((w) =>
-  w.item ? withNote(fromService(w.item), w.planned && w.planned.note)
+  w.item ? withNote(withFmt(fromService(w.item), "fmt" in w.item ? w.item.fmt : w.planned && w.planned.fmt), w.planned && w.planned.note)
     : w.orphan ? { kind: "note", text: `<h3>${esc(w.orphan)}</h3>${noteHtml(w.note.note)}` } : { kind: "note", text: w.note.text });
 
 function showDialog(html, onMount) {
@@ -2409,7 +2594,11 @@ function renderRemote() {
     const del = el("button", "del", "✕");
     del.title = "Remove from the service list";
     del.onclick = () => cmd("remove", { id: it.id });
-    li.append(grip, el("span", "num", it.done && !li.classList.contains("live") ? "✓" : i), body, del);
+    const fmtBtn = formatButton(it, () => openFormat({ item: fromService(it), label: it.label, save: (fmt) => {
+      it.fmt = fmt;  // shown at once; the laptop keeps it
+      cmd("format", { id: it.id, fmt });
+    } }));
+    li.append(grip, el("span", "num", it.done && !li.classList.contains("live") ? "✓" : i), body, fmtBtn, del);
     ul.appendChild(li);
   }
   $("list-empty").classList.toggle("hidden", r.service.length > 0);
@@ -2584,7 +2773,8 @@ async function init() {
     if (e.key === "Enter") { e.preventDefault(); $("para-find").blur(); firstParaMatch(); }
   });
   initNoteEditor();
-  $("list-select").onchange = (e) => { closeNoteEditor(); state.current = e.target.value; saveLists(); renderList(); };
+  initFormatPane();
+  $("list-select").onchange = (e) => { closeNoteEditor(); closeFormat(); state.current = e.target.value; saveLists(); renderList(); };
   $("list-name").addEventListener("input", (e) => { currentList().name = e.target.value; saveLists(); renderLists(); });
   $("list-new").onclick = () => { closeNoteEditor(); const l = newList(); state.lists.push(l); state.current = l.id; saveLists(); renderList(); $("list-name").focus(); };
   $("list-delete").onclick = () => {

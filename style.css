@@ -234,6 +234,18 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .swatch.m-blue { background: rgba(10, 132, 255, .7); } .swatch.m-pink { background: rgba(255, 45, 145, .65); }
 .swatch.m-orange { background: rgba(255, 149, 0, .8); } .swatch.m-none { color: var(--muted); font-weight: 800; }
 .marker-colors .swatch.active { outline: 3px solid var(--blue); outline-offset: 2px; }
+/* the text of a list item as it will be on the screen (Aa in the list) */
+#list-items .fmt-btn { font-weight: 800; font-size: 15px; min-width: 40px; color: var(--muted); }
+#list-items .fmt-btn.on { color: var(--blue); }
+.fmt-hint { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+.fmt-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 0 30vh; }
+.fmt-unit { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
+.fmt-n { flex: none; width: 40px; text-align: right; color: var(--coral); font-weight: 700; padding-top: 10px; }
+.fmt-text { flex: 1; background: #111; color: #fff; border-radius: 10px; padding: 10px 12px; font-size: 18px; line-height: 1.45;
+            outline: none; -webkit-user-select: text; user-select: text; caret-color: transparent; }
+.fmt-text:focus { box-shadow: 0 0 0 2px var(--blue); }
+.s-swatch { background: #111 !important; font-weight: 800; font-size: 16px; }
+
 /* text colour and font */
 .text-icon { font-weight: 800; background: linear-gradient(90deg, #FF3B30, #FF9500, #34C759, #0A84FF, #AF52DE);
              -webkit-background-clip: text; background-clip: text; color: transparent; }

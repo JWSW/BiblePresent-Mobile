@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.19">
+<link rel="stylesheet" href="style.css?v=1.20">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -155,6 +155,32 @@
       <div class="note-body" id="note-body"></div>
     </div>
 
+    <!-- the text of a list item as it will be on the screen: bold, underline, colours -->
+    <div class="note-pane fmt-pane hidden" id="fmt-pane">
+      <div class="note-head">
+        <span class="note-title" id="fmt-title">Format</span>
+        <button id="fmt-clear" class="ghost small">Clear all</button>
+        <button id="fmt-done" class="primary small">Done</button>
+      </div>
+      <p class="fmt-hint" id="fmt-hint"></p>
+      <div class="note-tools" id="fmt-tools">
+        <button data-cmd="bold" aria-label="Bold"><b>B</b></button>
+        <button data-cmd="italic" aria-label="Italic"><i>I</i></button>
+        <button data-cmd="underline" aria-label="Underline"><u>U</u></button>
+        <button data-cmd="colors" aria-label="Colour"><span class="text-icon">A</span> Colour</button>
+        <span class="marker-colors hidden" id="fmt-colors">
+          <button data-color="" class="swatch s-swatch" style="color:#fff" aria-label="Normal colour">A</button>
+          <button data-color="yellow" class="swatch s-swatch" style="color:#FFD60A" aria-label="Yellow">A</button>
+          <button data-color="orange" class="swatch s-swatch" style="color:#FF9F0A" aria-label="Orange">A</button>
+          <button data-color="red" class="swatch s-swatch" style="color:#FF453A" aria-label="Red">A</button>
+          <button data-color="green" class="swatch s-swatch" style="color:#30D158" aria-label="Green">A</button>
+          <button data-color="blue" class="swatch s-swatch" style="color:#64D2FF" aria-label="Blue">A</button>
+          <button data-color="purple" class="swatch s-swatch" style="color:#BF5AF2" aria-label="Purple">A</button>
+        </span>
+      </div>
+      <div class="fmt-body" id="fmt-body"></div>
+    </div>
+
     <div class="addbar hidden" id="addbar">
       <span id="addbar-label"></span>
       <button id="addbar-clear" class="ghost">Clear</button>
@@ -215,6 +241,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.19"></script>
+<script src="app.js?v=1.20"></script>
 </body>
 </html>
