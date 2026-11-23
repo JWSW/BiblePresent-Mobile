@@ -453,7 +453,10 @@ function renderSermonList() {
   if (!codes.length) ul.innerHTML = '<li class="info">The sermon list is loading…</li>';
 }
 const paraCache = {};
-async function openSermon(code, num, lang, searchText = null) {
+let sermonOpening = 0;  // only the sermon (language) asked for last is shown, also when an earlier one loads slower
+/** flash: a coral flash on paragraph num (when jumping to it); not when only the language is switched. */
+async function openSermon(code, num, lang, searchText = null, flash = true) {
+  const ticket = ++sermonOpening;
   code = code.toUpperCase();
   const info = state.sermonIndex[code] || {};
   lang = lang || (info[state.sermonLang] ? state.sermonLang : info.nl ? "nl" : "en");
@@ -469,12 +472,14 @@ async function openSermon(code, num, lang, searchText = null) {
       paraCache[key] = (data.blocks || []).map((b) => [b.blockNumber, cleanText(b.blockText)]);
     }
   } catch (e) {
-    ol.innerHTML = `<li class="info">Could not load this sermon (${navigator.onLine ? e.message : "no internet"}).</li>`;
+    if (ticket === sermonOpening) ol.innerHTML = `<li class="info">Could not load this sermon (${navigator.onLine ? e.message : "no internet"}).</li>`;
     return;
   }
+  if (ticket !== sermonOpening) return;  // another sermon or language was chosen meanwhile
   state.sermon = { code, lang, paras: paraCache[key], searchText };
+  const keep = state.sel && state.sel.kind === "sermon" && state.sel.code === code && num === state.sel.start ? state.sel.end : num;
   if (state.sel && state.sel.kind === "sermon" && (state.sel.code !== code || state.sel.lang !== lang)) state.sel = null;
-  if (num) state.sel = { kind: "sermon", code, lang, start: num, end: num };
+  if (num) state.sel = { kind: "sermon", code, lang, start: num, end: keep || num };
   ol.innerHTML = "";
   for (const [n, text] of state.sermon.paras) {
     const li = el("li");
@@ -489,10 +494,11 @@ async function openSermon(code, num, lang, searchText = null) {
   // a paragraph asked for by number must be visible
   if (num && ol.querySelector(`li[data-n="${num}"].hidden`)) { setField("para-find", ""); applyParaFind(); }
   paintSelection();
+  paintLive();  // the coral frame of what is live on the laptop (console), in either language
   if (num) {
     scrollToItem("para-list", num);
     const li = ol.querySelector(`li[data-n="${num}"]`);
-    if (li) { li.classList.add("flash"); setTimeout(() => li.classList.remove("flash"), 1600); }
+    if (li && flash) { li.classList.add("flash"); setTimeout(() => li.classList.remove("flash"), 1600); }
   } else ol.scrollTop = 0;
 }
 function renderParaLangs(code, lang) {
@@ -504,7 +510,7 @@ function renderParaLangs(code, lang) {
     const b = el("button", l === lang ? "active" : "", l.toUpperCase());
     b.onclick = () => {
       state.sermonLang = l;
-      openSermon(code, state.sel && state.sel.code === code ? state.sel.start : null, l, state.sermon && state.sermon.searchText);
+      openSermon(code, state.sel && state.sel.code === code ? state.sel.start : null, l, state.sermon && state.sermon.searchText, false);
     };
     box.appendChild(b);
   }
@@ -723,6 +729,9 @@ function renderList() {
    units: {"3:16" or "14": html}}; the html only has <b> <i> <u> <span class="s-yellow"> <br>.
    Only the formatting changes, never the words, so the laptop shows it only on that same text. */
 const SCREEN_COLORS = { yellow: "#FFD60A", orange: "#FF9F0A", red: "#FF453A", green: "#30D158", blue: "#64D2FF", purple: "#BF5AF2" };
+// the same colours, darker, for the editor in light mode (bright yellow cannot be read on white)
+const SCREEN_COLORS_LIGHT = { yellow: "#A07800", orange: "#C25E00", red: "#D70015", green: "#1E7B34", blue: "#0067A3", purple: "#8944AB" };
+const editorColor = (name) => (matchMedia("(prefers-color-scheme: dark)").matches ? SCREEN_COLORS : SCREEN_COLORS_LIGHT)[name];
 const setFmt = (it, fmt) => { if (fmt) it.fmt = fmt; else delete it.fmt; };
 function formatButton(it, onClick) {
   const b = el("button", "del fmt-btn" + (it.fmt ? " on" : ""), "Aa");
@@ -761,12 +770,12 @@ function fmtSegments(html) {
   walk(t.content, {}, true);
   return segs;
 }
-/** A css colour → one of the screen colours, null for white/the normal colour (undefined: not a colour). */
+/** A css colour → one of the screen colours (either shade), null for any other (the normal colour; undefined: no colour). */
 function screenColorName(css) {
   const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(css);
   if (!m) return undefined;
   const hex = "#" + [m[1], m[2], m[3]].map((x) => Number(x).toString(16).padStart(2, "0")).join("").toUpperCase();
-  return Object.keys(SCREEN_COLORS).find((k) => SCREEN_COLORS[k] === hex) || null;
+  return Object.keys(SCREEN_COLORS).find((k) => SCREEN_COLORS[k] === hex || SCREEN_COLORS_LIGHT[k] === hex) || null;
 }
 function fmtHtml(segs, forEditor) {
   return segs.map(([text, b, i, u, c]) => {
@@ -774,7 +783,7 @@ function fmtHtml(segs, forEditor) {
     if (u) t = `<u>${t}</u>`;
     if (i) t = `<i>${t}</i>`;
     if (b) t = `<b>${t}</b>`;
-    if (c) t = forEditor ? `<span style="color:${SCREEN_COLORS[c]}">${t}</span>` : `<span class="s-${c}">${t}</span>`;
+    if (c) t = forEditor ? `<span style="color:${editorColor(c)}">${t}</span>` : `<span class="s-${c}">${t}</span>`;
     return t;
   }).join("");
 }
@@ -852,6 +861,38 @@ function closeFormat(switching) {
   $("fmt-body").innerHTML = "";
   if (!switching) { setMode(s.backMode || "browse"); renderList(); }
 }
+/** No formatting on the selected words: rebuilt from the segments, so it works the same everywhere. */
+function clearSelected(sel) {
+  const ed = sel.anchorNode.parentElement && sel.anchorNode.parentElement.closest(".fmt-text");
+  if (!ed || !ed.contains(sel.focusNode)) return toast("Select words within one verse or paragraph.");
+  const r = sel.getRangeAt(0);
+  // a position in the text as fmtSegments counts it (a line break is one character)
+  const offset = (container, off) => {
+    let n = 0, done = false;
+    const walk = (node) => {
+      for (let k = 0; k < node.childNodes.length && !done; k++) {
+        const c = node.childNodes[k];
+        if (node === container && k === off) { done = true; return; }
+        if (c.nodeType === 3) { if (c === container) { n += off; done = true; return; } n += c.data.length; }
+        else if (c.tagName === "BR") n += 1;
+        else walk(c);
+      }
+      if (node === container && !done) done = true;
+    };
+    walk(ed);
+    return n;
+  };
+  const from = offset(r.startContainer, r.startOffset), to = offset(r.endContainer, r.endOffset);
+  const segs = fmtSegments(ed.innerHTML), out = [];
+  let pos = 0;
+  for (const [text, b, i, u, c] of segs) {  // the selected stretch of each segment becomes plain
+    const a = pos, z = pos + text.length;
+    const cut = [[a, Math.max(a, Math.min(z, from)), true], [Math.max(a, from), Math.min(z, to), false], [Math.max(a, Math.min(z, to)), z, true]];
+    for (const [s, e, keep] of cut) if (e > s) out.push([text.slice(s - a, e - a), keep && b, keep && i, keep && u, keep ? c : null]);
+    pos = z;
+  }
+  ed.innerHTML = fmtHtml(out, true);
+}
 function initFormatPane() {
   const body = $("fmt-body");
   // only formatting: typing, deleting, pasting and dropping are not let through
@@ -861,16 +902,39 @@ function initFormatPane() {
   body.addEventListener("paste", (e) => e.preventDefault());
   body.addEventListener("drop", (e) => e.preventDefault());
   body.addEventListener("input", saveFormat);
+  // a tap on a word selects that word (the handles then make the selection bigger)
+  body.addEventListener("click", () => {
+    const sel = getSelection();
+    if (!sel.rangeCount || !sel.isCollapsed || sel.anchorNode.nodeType !== 3 || !body.contains(sel.anchorNode)) return;
+    const node = sel.anchorNode, t = node.data, at = sel.anchorOffset;
+    let start = at, end = at;
+    while (start > 0 && /\S/.test(t[start - 1])) start--;
+    while (end < t.length && /\S/.test(t[end])) end++;
+    if (start === end) return;
+    // without the punctuation around it
+    while (start < end && /[«“"'‘(\[]/.test(t[start])) start++;
+    while (end > start && /[.,;:!?»”"'’)\]…]/.test(t[end - 1])) end--;
+    const r = document.createRange();
+    r.setStart(node, start);
+    r.setEnd(node, end);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  });
+  for (const sw of $("fmt-colors").querySelectorAll("[data-color]")) {  // the swatches in this mode's shades
+    sw.style.color = sw.dataset.color ? editorColor(sw.dataset.color) : "var(--text)";
+  }
   for (const b of $("fmt-tools").querySelectorAll("button")) {
     b.addEventListener("pointerdown", (e) => e.preventDefault());  // keep the selection
     b.onclick = () => {
       if (b.dataset.cmd === "colors") { $("fmt-colors").classList.toggle("hidden"); return; }
       const sel = getSelection();
-      if (!sel.rangeCount || sel.isCollapsed || !body.contains(sel.anchorNode)) return toast("Select words first.");
-      if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
+      if (!sel.rangeCount || sel.isCollapsed || !body.contains(sel.anchorNode)) return toast("First tap a word (or select words).");
+      if (b.dataset.cmd === "clear") clearSelected(sel);
+      else if (b.dataset.cmd) document.execCommand(b.dataset.cmd);
       else {
         document.execCommand("styleWithCSS", false, true);
-        document.execCommand("foreColor", false, b.dataset.color ? SCREEN_COLORS[b.dataset.color] : "#FFFFFF");
+        // the normal colour: any colour that is not a screen colour counts as "no colour" when saved
+        document.execCommand("foreColor", false, b.dataset.color ? editorColor(b.dataset.color) : getComputedStyle(body).color);
         document.execCommand("styleWithCSS", false, false);
       }
       saveFormat();
@@ -1559,9 +1623,10 @@ const HELP = [
   ["Formatting the text on the screen", `
     <p>Make words of a verse or sermon quote <b>bold</b>, <i>italic</i>, <u>underlined</u> or coloured on the laptop's screen,
        only for that item in the list.</p>
-    <ul><li>Tap <b>Aa</b> on the item. Its text opens on the left, as on the screen (light on dark).</li>
-    <li>Select words (tap and hold, then drag the handles) and tap <b>B</b>, <b>I</b>, <b>U</b> or <b>Colour</b>. Tap again to undo it;
-        <b>Clear all</b> removes all formatting of the item.</li>
+    <ul><li>Tap <b>Aa</b> on the item. Its text opens on the left, each verse (or paragraph) in its own box.</li>
+    <li><b>Tap a word</b> to select it; drag the blue handles to select more. Then tap <b>B</b>, <b>I</b>, <b>U</b> or <b>Colour</b>
+        (tap B, I or U again to undo it). <b>Clear selected</b> removes the formatting of the selected words,
+        <b>Clear all</b> of the whole item.</li>
     <li>Only the formatting can be changed, not the words.</li>
     <li>It goes along to the laptop with the list. The laptop shows it when that item is presented from the service list,
         on the same text: the same Bible (for verses, the top half's Bible, e.g. HSV), or the same sermon language.

@@ -237,14 +237,16 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 /* the text of a list item as it will be on the screen (Aa in the list) */
 #list-items .fmt-btn { font-weight: 800; font-size: 15px; min-width: 40px; color: var(--muted); }
 #list-items .fmt-btn.on { color: var(--blue); }
-.fmt-hint { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+.fmt-hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.fmt-how { font-size: 14px; margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--sel); color: var(--text); }
 .fmt-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 0 30vh; }
 .fmt-unit { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
 .fmt-n { flex: none; width: 40px; text-align: right; color: var(--coral); font-weight: 700; padding-top: 10px; }
-.fmt-text { flex: 1; background: #111; color: #fff; border-radius: 10px; padding: 10px 12px; font-size: 18px; line-height: 1.45;
-            outline: none; -webkit-user-select: text; user-select: text; caret-color: transparent; }
-.fmt-text:focus { box-shadow: 0 0 0 2px var(--blue); }
-.s-swatch { background: #111 !important; font-weight: 800; font-size: 16px; }
+.fmt-text { flex: 1; background: var(--field); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
+            padding: 10px 12px; font-size: 18px; line-height: 1.5; outline: none; cursor: text;
+            -webkit-user-select: text; user-select: text; caret-color: transparent; }
+.fmt-text:focus { border-color: var(--blue); }
+.s-swatch { font-weight: 800; font-size: 16px; }
 
 /* text colour and font */
 .text-icon { font-weight: 800; background: linear-gradient(90deg, #FF3B30, #FF9500, #34C759, #0A84FF, #AF52DE);

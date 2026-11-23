@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.20">
+<link rel="stylesheet" href="style.css?v=1.21">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -162,22 +162,25 @@
         <button id="fmt-clear" class="ghost small">Clear all</button>
         <button id="fmt-done" class="primary small">Done</button>
       </div>
-      <p class="fmt-hint" id="fmt-hint"></p>
+      <p class="fmt-how"><b>Tap a word</b> to select it; drag the blue handles to select more. Then tap
+        <b>B</b>, <i>I</i>, <u>U</u> or <b>Colour</b>.</p>
       <div class="note-tools" id="fmt-tools">
         <button data-cmd="bold" aria-label="Bold"><b>B</b></button>
         <button data-cmd="italic" aria-label="Italic"><i>I</i></button>
         <button data-cmd="underline" aria-label="Underline"><u>U</u></button>
         <button data-cmd="colors" aria-label="Colour"><span class="text-icon">A</span> Colour</button>
+        <button data-cmd="clear" aria-label="Clear the formatting of the selected words">Clear selected</button>
         <span class="marker-colors hidden" id="fmt-colors">
-          <button data-color="" class="swatch s-swatch" style="color:#fff" aria-label="Normal colour">A</button>
-          <button data-color="yellow" class="swatch s-swatch" style="color:#FFD60A" aria-label="Yellow">A</button>
-          <button data-color="orange" class="swatch s-swatch" style="color:#FF9F0A" aria-label="Orange">A</button>
-          <button data-color="red" class="swatch s-swatch" style="color:#FF453A" aria-label="Red">A</button>
-          <button data-color="green" class="swatch s-swatch" style="color:#30D158" aria-label="Green">A</button>
-          <button data-color="blue" class="swatch s-swatch" style="color:#64D2FF" aria-label="Blue">A</button>
-          <button data-color="purple" class="swatch s-swatch" style="color:#BF5AF2" aria-label="Purple">A</button>
+          <button data-color="" class="swatch s-swatch" aria-label="Normal colour">A</button>
+          <button data-color="yellow" class="swatch s-swatch" aria-label="Yellow">A</button>
+          <button data-color="orange" class="swatch s-swatch" aria-label="Orange">A</button>
+          <button data-color="red" class="swatch s-swatch" aria-label="Red">A</button>
+          <button data-color="green" class="swatch s-swatch" aria-label="Green">A</button>
+          <button data-color="blue" class="swatch s-swatch" aria-label="Blue">A</button>
+          <button data-color="purple" class="swatch s-swatch" aria-label="Purple">A</button>
         </span>
       </div>
+      <p class="fmt-hint" id="fmt-hint"></p>
       <div class="fmt-body" id="fmt-body"></div>
     </div>
 
@@ -241,6 +244,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.20"></script>
+<script src="app.js?v=1.21"></script>
 </body>
 </html>
