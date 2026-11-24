@@ -936,6 +936,8 @@ function initFormatPane() {
         // the normal colour: any colour that is not a screen colour counts as "no colour" when saved
         document.execCommand("foreColor", false, b.dataset.color ? editorColor(b.dataset.color) : getComputedStyle(body).color);
         document.execCommand("styleWithCSS", false, false);
+        sel.collapseToEnd();  // so the colour is seen straight away
+        $("fmt-colors").classList.add("hidden");
       }
       saveFormat();
     };
