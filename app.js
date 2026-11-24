@@ -102,7 +102,7 @@ function newList(name) {
   return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: name || "", items: [] };
 }
 const currentList = () => state.lists.find((l) => l.id === state.current);
-function saveLists() { store.set("lists", state.lists); store.set("current", state.current); }
+function saveLists() { store.set("lists", state.lists); store.set("current", state.current); scheduleSync(); }
 
 function toast(text) {
   const t = $("toast");
@@ -266,6 +266,34 @@ function addSelection() {
   state.sel = null;
   paintSelection();
 }
+/** The selected verses / paragraphs as text, with the reference, to paste elsewhere. */
+async function copySelection() {
+  const s = state.sel;
+  if (!s) return;
+  let head, lines = [];
+  if (s.kind === "bible") {
+    head = `${bookName(s.b)} ${s.c}:${range(s.start, s.end)} (${state.bibleId})`;
+    for (let v = s.start; v <= s.end; v++) lines.push(s.start === s.end ? verseText(s.b, s.c, v) : `${v} ${verseText(s.b, s.c, v)}`);
+  } else {
+    head = `${s.code} ¶${range(s.start, s.end)} ${sermonTitle(s.code, s.lang)}`.trim();
+    const paras = new Map(paraCache[`${s.lang}/${s.code}`] || (state.sermon ? state.sermon.paras : []));
+    for (let n = s.start; n <= s.end; n++) if (paras.has(n)) lines.push(s.start === s.end ? paras.get(n) : `${n} ${paras.get(n)}`);
+  }
+  const text = `${head}\n${lines.join("\n")}`;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {  // older browsers
+    const ta = el("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) return toast("Copying is not possible here.");
+  }
+  toast(`Copied: ${head}`);
+}
 /** Connected: put the selected verse / paragraph on the screen right away. */
 function presentSelection() {
   const s = state.sel;
@@ -399,8 +427,16 @@ function applyParaFind() {
   if (!state.sermon) return;
   const terms = markTerms(), other = otherParas();
   const otherTag = otherLang(state.sermon.lang).toUpperCase();
+  const ol = $("para-list");
+  // search emptied: stay at the selected paragraph (or the one at the top), not back to ¶1
+  let anchor = null;
+  if (!$("para-find").value.trim() && ol.querySelector("li.hidden")) {
+    const top = ol.getBoundingClientRect().top;
+    anchor = ol.querySelector("li.sel") ||
+      [...ol.children].find((li) => li.dataset.n && !li.classList.contains("hidden") && li.getBoundingClientRect().bottom > top);
+  }
   let shown = 0, total = 0;
-  for (const li of $("para-list").children) {
+  for (const li of ol.children) {
     if (!li.dataset.n) continue;
     const text = li.dataset.text, n = Number(li.dataset.n);
     let ok = paraMatches(n, text);
@@ -412,6 +448,8 @@ function applyParaFind() {
     shown += ok;
   }
   $("para-count").textContent = $("para-find").value.trim() && total ? `${shown} of ${total}` : "";
+  if (anchor) ol.scrollTop += anchor.getBoundingClientRect().top - ol.getBoundingClientRect().top
+    - (anchor.classList.contains("sel") ? ol.clientHeight / 3 : 0);
 }
 /** Enter in "Find in this sermon": select the first match. */
 function firstParaMatch() {
@@ -833,9 +871,16 @@ async function openFormat(s) {
     const segs = own[key] ? fmtSegments(own[key]) : null;
     ed.innerHTML = segs && normWs(fmtPlain(segs)) === normWs(text) ? fmtHtml(segs, true) : esc(text).replace(/\n/g, "<br>");
     ed._unit = { key, text };
-    row.append(el("span", "fmt-n", label), ed);
+    const side = el("div", "fmt-n");
+    const clear = el("button", "fmt-unclear", "Clear");  // this verse / paragraph back to plain text
+    clear.type = "button";
+    clear.setAttribute("aria-label", `Clear the formatting of ${label}`);
+    clear.onclick = () => { ed.innerHTML = esc(text).replace(/\n/g, "<br>"); saveFormat(); };
+    side.append(el("span", "", label), clear);
+    row.append(side, ed);
     body.append(row);
   }
+  fmtMarkRows();
   $("fmt-pane").classList.remove("hidden");
   $("fmt-colors").classList.add("hidden");
   setMode("browse");  // phones: the pane is on the left side
@@ -850,13 +895,22 @@ function fmtResult() {
   return Object.keys(units).length ? { src: fmtSession.source.src, units } : null;
 }
 function saveFormat() {
-  if (fmtSession) fmtSession.save(fmtResult());
+  if (!fmtSession) return;
+  fmtMarkRows();
+  fmtSession.save(fmtResult());
+}
+/** The Clear button of a verse / paragraph only shows while it has formatting. */
+function fmtMarkRows() {
+  for (const ed of $("fmt-body").querySelectorAll(".fmt-text")) {
+    ed.parentElement.classList.toggle("formatted", fmtFormatted(fmtSegments(ed.innerHTML)));
+  }
 }
 function closeFormat(switching) {
   const s = fmtSession;
   if (!s) return;
   saveFormat();
   fmtSession = null;
+  scheduleSync(500);
   $("fmt-pane").classList.add("hidden");
   $("fmt-body").innerHTML = "";
   if (!switching) { setMode(s.backMode || "browse"); renderList(); }
@@ -936,8 +990,6 @@ function initFormatPane() {
         // the normal colour: any colour that is not a screen colour counts as "no colour" when saved
         document.execCommand("foreColor", false, b.dataset.color ? editorColor(b.dataset.color) : getComputedStyle(body).color);
         document.execCommand("styleWithCSS", false, false);
-        sel.collapseToEnd();  // so the colour is seen straight away
-        $("fmt-colors").classList.add("hidden");
       }
       saveFormat();
     };
@@ -1136,6 +1188,7 @@ function closeNoteEditor(switching) {
   const s = noteSession;
   if (!s) return;
   noteSession = null;
+  scheduleSync(500);  // what other devices changed meanwhile comes in now
   for (const ed of $("note-body").querySelectorAll(".note-editor")) if (!noteText(ed.innerHTML)) ed._note.remove();
   $("note-pane").classList.add("hidden");
   if (document.activeElement) document.activeElement.blur();
@@ -1543,6 +1596,265 @@ function remindBackup() {
 }
 const installed = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
 
+// ---------------------------------------------------------------- syncing one's own devices
+/* The lists of one person's devices (iPad, laptop, phone) are kept the same through a small server
+   (sync-server/worker.js in the laptop's repository). Everything is encrypted here with the sync code,
+   which never leaves the devices; the server only sees a group number (a hash of the code) and
+   unreadable records, one per list. Connecting to a laptop to present has nothing to do with this.
+   store "sync": {code, device, since, recs: {listId: {ver, hash} | {ver, deleted: true}}, last, error} */
+const SYNC_URL = "";  // the server, once it runs
+const syncUrl = () => store.get("syncUrl", SYNC_URL);
+const syncState = () => store.get("sync", null);
+const CODE_CHARS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";  // no I, L, O, U: they look like other characters
+const newSyncCode = () => [...crypto.getRandomValues(new Uint8Array(20))].map((x) => CODE_CHARS[x & 31]).join("");
+const cleanSyncCode = (t) => (t || "").toUpperCase().replace(/O/g, "0").replace(/[IL]/g, "1")
+  .split("").filter((c) => CODE_CHARS.includes(c)).join("");
+const showSyncCode = (code) => code.match(/.{1,4}/g).join("-");
+const sync = { running: false, again: false, timer: 0, keys: null, keysFor: "" };
+
+function b64u(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+async function syncKeys(code) {
+  if (sync.keysFor !== code) {
+    const enc = new TextEncoder();
+    const group = new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("bp-sync-group:" + code)));
+    const raw = await crypto.subtle.digest("SHA-256", enc.encode("bp-sync-key:" + code));
+    sync.keys = { group: [...group].map((x) => x.toString(16).padStart(2, "0")).join(""),
+                  key: await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]) };
+    sync.keysFor = code;
+  }
+  return sync.keys;
+}
+async function gz(bytes, how) {
+  const stream = new Blob([bytes]).stream().pipeThrough(how === "in" ? new CompressionStream("gzip") : new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+/** obj -> text the server keeps: [1][gzipped?][iv 12 bytes][AES-GCM] in base64url. */
+async function syncSeal(obj, key) {
+  let bytes = new TextEncoder().encode(JSON.stringify(obj));
+  const packed = Boolean(window.CompressionStream);
+  if (packed) bytes = await gz(bytes, "in");
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, bytes));
+  const out = new Uint8Array(14 + ct.length);
+  out.set([1, packed ? 1 : 0]); out.set(iv, 2); out.set(ct, 14);
+  return b64u(out);
+}
+async function syncOpen(text, key) {
+  const all = unb64u(text);
+  if (all[0] !== 1) throw new Error("unknown format");
+  let bytes = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.subarray(2, 14) }, key, all.subarray(14)));
+  if (all[1]) bytes = await gz(bytes, "out");
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+/** A short fingerprint of a list: tells whether it changed here since the last sync. */
+function listHash(l) {
+  const s = JSON.stringify([l.name || "", l.items]);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(36) + (h1 >>> 0).toString(36);
+}
+const validItem = (it) => it && (it.kind === "note" || (it.kind === "sermon" && it.code) || Number.isInteger(it.b));
+function guessDevice() {
+  const ua = navigator.userAgent;
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return "iPad";
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/Android/.test(ua)) return "Android";
+  if (/Macintosh/.test(ua)) return "Mac";
+  return "Laptop";
+}
+
+function scheduleSync(ms = 3000) {
+  if (!syncState() || conn.info || !syncUrl()) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(runSync, ms);
+}
+/** Fetch what the other devices changed, then send what changed here. */
+async function runSync() {
+  let st = syncState();
+  if (!st || conn.info || !syncUrl() || !navigator.onLine) return;
+  if (sync.running) { sync.again = true; return; }
+  sync.running = true;
+  let changed = false;
+  try {
+    const { key, group } = await syncKeys(st.code);
+    const editing = Boolean(noteSession || fmtSession);  // an open note or format pane: only send, take in later
+    if (!editing) changed = await syncPull(st, key, group);
+    changed = (await syncPush(st, key, group, editing)) || changed;
+    st.last = Date.now();
+    st.error = "";
+  } catch (e) {
+    st.error = e.message || String(e);
+  } finally {
+    sync.running = false;
+    const now = syncState();
+    if (now && now.code === st.code) store.set("sync", st);  // not when sync was stopped meanwhile
+    if (changed) {
+      if (!state.lists.length) state.lists.push(newList());
+      if (!state.lists.some((l) => l.id === state.current)) state.current = state.lists[0].id;
+      store.set("lists", state.lists); store.set("current", state.current);
+      renderList();
+    }
+    if (sync.again) { sync.again = false; scheduleSync(500); }
+    const s = document.getElementById("sync-status");
+    if (s) s.textContent = syncStatusText();
+  }
+}
+async function syncPull(st, key, group) {
+  let changed = false;
+  for (;;) {
+    const res = await fetch(`${syncUrl()}/v1/${group}?since=${st.since}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`the sync server answered ${res.status}`);
+    const { items, more } = await res.json();
+    for (const r of items) {
+      changed = (await syncTakeIn(st, key, r.id, r.ver, r.data)) || changed;
+      st.since = Math.max(st.since, r.ver);
+    }
+    if (!more || !items.length) return changed;
+  }
+}
+/** A list from another device. Changed here too since the last sync: both are kept. */
+async function syncTakeIn(st, key, id, ver, data) {
+  const rec = st.recs[id];
+  if (rec && rec.ver >= ver) return false;  // sent from here, or had already
+  let p;
+  try { p = await syncOpen(data, key); } catch { return false; }
+  const local = state.lists.find((l) => l.id === id);
+  const dirty = local && (!rec || rec.deleted || rec.hash !== listHash(local));
+  if (p.deleted) {
+    if (dirty) { st.recs[id] = { ver, hash: "" }; return false; }  // changed here after all: kept (and sent again)
+    if (local) {
+      if (local.items.length) trashPut({ type: "list", list: local, why: `deleted on the ${p.device || "other device"}` });
+      state.lists = state.lists.filter((l) => l !== local);
+    }
+    st.recs[id] = { ver, deleted: true };
+    return Boolean(local);
+  }
+  const list = { id, name: String((p.list && p.list.name) || ""), items: ((p.list && p.list.items) || []).filter(validItem) };
+  const hash = listHash(list);
+  if (!local) state.lists.push(list);
+  else if (!dirty || listHash(local) === hash) { local.name = list.name; local.items = list.items; }
+  else {  // changed on both: the other device's version takes this place, this one becomes a copy
+    local.id = newList().id;
+    local.name = `${local.name || "List"} (${st.device}, ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`;
+    state.lists.splice(state.lists.indexOf(local), 0, list);
+    if (state.current === id) state.current = local.id;
+    toast(`“${list.name || "List"}” was changed on two devices: both are kept`);
+    sync.again = true;
+  }
+  st.recs[id] = { ver, hash };
+  return true;
+}
+async function syncSend(group, id, base, data) {
+  const res = await fetch(`${syncUrl()}/v1/${group}`, { method: "POST", headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({ id, base, data }) });
+  if (res.status === 409) return { conflict: await res.json() };
+  if (res.status === 413) { toast("A list is too big to sync."); return {}; }
+  if (!res.ok) throw new Error(`the sync server answered ${res.status}`);
+  return res.json();
+}
+async function syncPush(st, key, group, editing) {
+  let changed = false;
+  const handle = async (r, id) => {
+    if (r.conflict && !editing && r.conflict.data) changed = (await syncTakeIn(st, key, id, r.conflict.ver, r.conflict.data)) || changed;
+  };
+  for (const l of [...state.lists]) {
+    const rec = st.recs[l.id];
+    if (!rec && !l.items.length && !l.name) continue;  // a new, empty list: once it has something
+    const hash = listHash(l);
+    if (rec && !rec.deleted && rec.hash === hash) continue;
+    const data = await syncSeal({ list: { name: l.name, items: l.items }, device: st.device, t: Date.now() }, key);
+    const r = await syncSend(group, l.id, rec ? rec.ver : 0, data);
+    if (r.ver) st.recs[l.id] = { ver: r.ver, hash };
+    else await handle(r, l.id);
+  }
+  for (const [id, rec] of Object.entries(st.recs)) {  // deleted here
+    if (rec.deleted || state.lists.some((l) => l.id === id)) continue;
+    const r = await syncSend(group, id, rec.ver, await syncSeal({ deleted: true, device: st.device, t: Date.now() }, key));
+    if (r.ver) st.recs[id] = { ver: r.ver, deleted: true };
+    else await handle(r, id);
+  }
+  return changed;
+}
+function syncStatusText() {
+  const st = syncState();
+  if (!st) return "";
+  if (st.error) return `Not synced: ${st.error}. It tries again by itself.`;
+  return st.last ? `Last synced ${ago(st.last)}.` : "Not synced yet.";
+}
+function startSync(code, device) {
+  store.set("sync", { code, device: device || guessDevice(), since: 0, recs: {}, last: 0, error: "" });
+  runSync();
+}
+/** ⋯ → Sync with my other devices: start, join, or see the code. */
+function syncDialog(joinCode) {
+  const st = syncState();
+  if (st && !joinCode) {
+    const link = `${location.origin}${location.pathname}#sync=${st.code}`;
+    showDialog(`<h2>Sync with my other devices</h2>
+      <p>This ${esc(st.device)} keeps the same lists and notes as your other devices with this sync code.
+         <span id="sync-status">${esc(syncStatusText())}</span></p>
+      <div class="sync-code">${showSyncCode(st.code)}</div>
+      <p class="hint">On another device: ⋯ → <b>Sync with my other devices…</b> → <b>Join</b>, and type this code.
+         Or open the link from <b>Copy link</b> there. Keep the code to yourself: it opens your lists.</p>
+      <div class="buttons"><button id="s-stop" class="ghost">Stop syncing on this device</button>
+        <button id="s-link" class="ghost">Copy link</button>
+        <button id="s-now" class="ghost">Sync now</button>
+        <button id="s-close" class="primary">Close</button></div>`, (d) => {
+      d.querySelector("#s-close").onclick = closeDialog;
+      d.querySelector("#s-now").onclick = () => { d.querySelector("#sync-status").textContent = "Syncing…"; runSync(); };
+      d.querySelector("#s-link").onclick = async () => {
+        try { await navigator.clipboard.writeText(link); toast("Link copied"); } catch { prompt("The link:", link); }
+      };
+      d.querySelector("#s-stop").onclick = () => {
+        if (!confirm("Stop syncing on this device? Its lists stay here, but no longer change along with your other devices.")) return;
+        store.set("sync", null);
+        closeDialog();
+        toast("Syncing stopped on this device");
+      };
+    });
+    return;
+  }
+  showDialog(`<h2>Sync with my other devices</h2>
+    <p>Keep the same lists and notes on your iPad, laptop and phone: write at home, present from the iPad.
+       Everything is encrypted with a sync code that only your devices know.
+       Connecting to a laptop to present has nothing to do with this.</p>
+    <label class="field-label" for="s-device">Name of this device</label>
+    <input id="s-device" type="text" value="${esc((st && st.device) || guessDevice())}">
+    <label class="field-label" for="s-code">Joining? The sync code from your other device</label>
+    <input id="s-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false"
+           placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" value="${joinCode ? showSyncCode(joinCode) : ""}">
+    <p class="hint">The lists on this device are added to the synced ones; nothing is overwritten.</p>
+    <div class="buttons"><button id="s-cancel" class="ghost">Cancel</button>
+      <button id="s-new" class="ghost">Start syncing (new code)</button>
+      <button id="s-join" class="primary">Join</button></div>`, (d) => {
+    const device = () => d.querySelector("#s-device").value.trim().slice(0, 30) || guessDevice();
+    d.querySelector("#s-cancel").onclick = closeDialog;
+    d.querySelector("#s-new").onclick = () => {
+      if (st && !confirm("This device already syncs. Start a new group with a new code?")) return;
+      startSync(newSyncCode(), device());
+      syncDialog();
+    };
+    d.querySelector("#s-join").onclick = () => {
+      const code = cleanSyncCode(d.querySelector("#s-code").value);
+      if (code.length !== 20) return toast("A sync code has 20 letters and digits.");
+      if (st && st.code !== code && !confirm("This device already syncs with another code. Switch to this one?")) return;
+      startSync(code, device());
+      syncDialog();
+      toast("Joined: your lists are coming in");
+    };
+  });
+}
+
 function showMenu() {
   const last = store.get("lastBackup", 0), onLaptop = store.get("laptopBackup", 0), n = trashGet().length;
   showDialog(`<h2>Lists and notes</h2>
@@ -1551,6 +1863,7 @@ function showMenu() {
     ${installed() ? "" : `<p class="warn">Add Bible Present to the Home Screen (Share <b>⎙</b> → <b>Add to Home Screen</b>).
       Safari may clear the data of a website you have not opened for a while; an app on the Home Screen is kept.</p>`}
     <div class="menu">
+      ${syncUrl() ? `<button id="m-sync">Sync with my other devices…${syncState() ? " (on)" : ""}</button>` : ""}
       <button id="m-trash">Recently deleted${n ? ` (${n})` : ""}</button>
       <button id="m-backup">Back up all lists and notes</button>
       <button id="m-restore">Restore from a backup file…</button>
@@ -1568,6 +1881,7 @@ function showMenu() {
         if (p && kept) p.textContent = "This device keeps the data permanently: it is not cleared to make room.";
       }).catch(() => {});
     }
+    if (d.querySelector("#m-sync")) d.querySelector("#m-sync").onclick = () => syncDialog();
     d.querySelector("#m-trash").onclick = showTrash;
     d.querySelector("#m-backup").onclick = () => { closeDialog(); backupLists(); };
     d.querySelector("#m-restore").onclick = restoreBackup;
@@ -1588,6 +1902,7 @@ const HELP = [
        and Safari keeps your lists and notes.</p>`],
   ["Finding Bible verses", `
     <ul><li>Choose a book, a chapter and a verse. Tap a second verse to select the verses in between; tap the selected verse again to clear it.</li>
+    <li><b>Copy</b> in the bar at the bottom copies the selected verses (or sermon paragraphs) with the reference, to paste in another app.</li>
     <li>Or type in <b>Go to…</b>: <code>joh 3:16-18</code>, <code>ps 23</code>, <code>1 kor 13</code>. Dutch, English and French book names work.</li>
     <li>The box next to it switches the Bible (SV, KJV, LSG). That is only for reading on the iPad.</li>
     <li>Another Bible, such as the HSV, can be added: see <i>Adding a Bible (e.g. the HSV)</i> below.</li></ul>
@@ -1628,7 +1943,7 @@ const HELP = [
     <ul><li>Tap <b>Aa</b> on the item. Its text opens on the left, each verse (or paragraph) in its own box.</li>
     <li><b>Tap a word</b> to select it; drag the blue handles to select more. Then tap <b>B</b>, <b>I</b>, <b>U</b> or <b>Colour</b>
         (tap B, I or U again to undo it). <b>Clear selected</b> removes the formatting of the selected words,
-        <b>Clear all</b> of the whole item.</li>
+        <b>Clear</b> under a verse number that of the whole verse (or paragraph), and <b>Clear all</b> that of the whole item.</li>
     <li>Only the formatting can be changed, not the words.</li>
     <li>It goes along to the laptop with the list. The laptop shows it when that item is presented from the service list,
         on the same text: the same Bible (for verses, the top half's Bible, e.g. HSV), or the same sermon language.
@@ -1673,14 +1988,30 @@ const HELP = [
         <b>⋯ → Restore from the laptop</b> brings a backup back. The laptop needs Bible Present 1.6.2 or later.</li>
     <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup file</b> adds the lists from such a file again (nothing is overwritten).
         If there has been no backup for two weeks, the app reminds you.</li>
-    <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li></ul>`],
+    <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li>
+    <li>Syncing with your other devices (below) also keeps a copy of everything on each of them.</li></ul>`],
+  ["Syncing your iPad, laptop and phone", `
+    <p>Write notes on your laptop at home and have them on your iPad (and the other way round): your own devices keep the
+       same lists and notes. This is separate from connecting to a laptop to present: that never changes your lists.</p>
+    <ol><li>On the first device: <b>⋯ → Sync with my other devices… → Start syncing</b>. You get a <b>sync code</b>.</li>
+    <li>On the other device: open Bible Present Mobile (on a laptop: <i>jwsw.github.io/BiblePresent-Mobile</i> in Chrome, Edge or Safari),
+        then <b>⋯ → Sync with my other devices… → Join</b> and type the code. Or open the link from <b>Copy link</b> on that device.</li>
+    <li>That's all: changes go along by themselves within seconds when there is internet, and otherwise as soon as there is.</li></ol>
+    <ul><li>Lists that were already on a device are added; nothing is overwritten.</li>
+    <li>If the same list was changed on two devices before they could sync, both are kept: the second one with the device's name
+        and the date after its name, e.g. <i>Sunday (iPad, 24 Nov)</i>.</li>
+    <li>A list deleted on one device is deleted on the others too, and goes to their <b>Recently deleted</b>.</li>
+    <li>Everything is encrypted with your sync code before it leaves the device: the server cannot read it.
+        Anyone with the code can, so keep it to yourself.</li>
+    <li>On a laptop, Chrome and Edge can install it as an app (the install icon in the address bar): its own window, and it works offline.</li></ul>`, "sync"],
 ];
 function showHelp() {
   showDialog(`<h2>Help</h2><div class="help" id="help"></div>
     <div class="buttons"><button id="h-close" class="primary">Close</button></div>`, (d) => {
     d.classList.add("wide");
     const box = d.querySelector("#help");
-    for (const [title, html] of HELP) {
+    for (const [title, html, need] of HELP) {
+      if (need === "sync" && !syncUrl()) continue;
       const sec = el("details");
       const sum = el("summary", "", title);
       const body = el("div", "help-body");
@@ -2824,6 +3155,7 @@ async function init() {
   for (const b of document.querySelectorAll(".mode-switch button")) b.onclick = () => setMode(b.dataset.mode);
   $("addbar-add").onclick = addSelection;
   $("addbar-clear").onclick = () => { state.sel = null; paintSelection(); };
+  $("addbar-copy").onclick = copySelection;
   $("sermon-find").addEventListener("input", () => renderSermonList());
   $("sermon-search-form").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -2879,6 +3211,13 @@ async function init() {
   }
   renderList();
   if (/[#&](return|restore)=/.test(location.hash)) await handleReturn(); else remindBackup();
+  const joinCode = cleanSyncCode(new URLSearchParams(location.hash.slice(1)).get("sync") || "");
+  if (joinCode) { history.replaceState(null, "", location.pathname); if (syncUrl()) syncDialog(joinCode); }
+  // syncing: at the start, when coming back to the app, when the internet is back, and every 30 s while open
+  runSync();
+  document.addEventListener("visibilitychange", () => runSync());
+  addEventListener("online", () => runSync());
+  setInterval(() => { if (document.visibilityState === "visible") runSync(); }, 30000);
   loadSermonIndex();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});

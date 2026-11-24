@@ -162,6 +162,11 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
           padding: 8px 8px 8px 16px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); }
 .addbar span { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .addbar .ghost { color: #fff; border-color: rgba(255, 255, 255, .35); }
+@media (max-width: 560px) {  /* narrow: the reference on its own line above the buttons */
+  .addbar { flex-wrap: wrap; }
+  .addbar span { flex-basis: 100%; }
+  .addbar button { flex: 1; }
+}
 .addbar .primary { background: var(--coral); border-color: var(--coral); }
 
 /* the list */
@@ -241,7 +246,11 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .fmt-how { font-size: 14px; margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--sel); color: var(--text); }
 .fmt-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 0 30vh; }
 .fmt-unit { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
-.fmt-n { flex: none; width: 40px; text-align: right; color: var(--coral); font-weight: 700; padding-top: 10px; }
+.fmt-n { flex: none; width: 52px; text-align: right; color: var(--coral); font-weight: 700; padding-top: 10px;
+         display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.fmt-unclear { display: none; font-size: 12px; font-weight: 600; padding: 4px 6px; min-height: 0;
+               background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); }
+.fmt-unit.formatted .fmt-unclear { display: block; }
 .fmt-text { flex: 1; background: var(--field); color: var(--text); border: 1px solid var(--border); border-radius: 10px;
             padding: 10px 12px; font-size: 18px; line-height: 1.5; outline: none; cursor: text;
             -webkit-user-select: text; user-select: text; caret-color: #0A84FF; }  /* iPadOS tints the selection with this */
@@ -361,6 +370,12 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
           box-shadow: 0 12px 40px rgba(0, 0, 0, .35); }
 .dialog h2 { margin: 0 0 8px; font-size: 20px; }
 .dialog p { margin: 0 0 12px; color: var(--muted); }
+.dialog .field-label { display: block; font-size: 13px; font-weight: 600; margin: 4px 0 4px; }
+.dialog input[type="text"]:not(.pin) { background: var(--field); border: 1px solid var(--border); border-radius: 10px;
+                                       padding: 10px 12px; font-size: 16px; color: var(--text); }
+.sync-code { font: 800 22px/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 1px; text-align: center;
+             background: var(--field); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 8px;
+             overflow-wrap: anywhere; -webkit-user-select: all; user-select: all; }
 .dialog input { margin-bottom: 12px; width: 100%; max-width: 100%; }
 .dialog input.pin { font-size: 28px; letter-spacing: 10px; text-indent: 10px; text-align: center; font-weight: 800;
                     background: var(--field); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
