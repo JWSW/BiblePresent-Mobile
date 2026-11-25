@@ -100,6 +100,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; d
 .items mark { background: rgba(227, 129, 95, .28); color: inherit; font-weight: 700; border-radius: 3px;
               padding: 0 1px; }
 .items li.sel.edge mark { background: #fff; color: #05344D; }
+.items li.sel.edge .found-in { background: #fff; color: #05344D; border-color: #fff; }
 .cols { flex: 1; display: flex; gap: 10px; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .col-title { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; color: var(--muted);
@@ -162,6 +163,9 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
           padding: 8px 8px 8px 16px; box-shadow: 0 6px 24px rgba(0, 0, 0, .25); }
 .addbar span { flex: 1; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .addbar .ghost { color: #fff; border-color: rgba(255, 255, 255, .35); }
+@media (max-width: 560px) {
+  .wide-only { display: none; }
+}
 @media (max-width: 560px) {  /* narrow: the reference on its own line above the buttons */
   .addbar { flex-wrap: wrap; }
   .addbar span { flex-basis: 100%; }
@@ -301,6 +305,16 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .dialog .warn { background: var(--note-bg); color: var(--note-text); border-radius: 10px; padding: 8px 12px; }
 .dialog .menu { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
 .dialog .menu button { text-align: left; min-height: 48px; }
+.my-lists { list-style: none; margin: 0 0 12px; padding: 0; max-height: 60vh; overflow-y: auto; }
+.my-lists li { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; cursor: pointer; }
+.my-lists li.current { border-color: var(--blue); box-shadow: inset 3px 0 0 var(--blue); }
+.my-lists li.info { color: var(--muted); text-align: center; border: none; cursor: default; }
+.my-lists .label { font-weight: 700; }
+.my-lists .meta { font-size: 12px; color: var(--muted); margin: 2px 0 4px; }
+.my-lists .snip { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.my-lists .snip.note { font-style: italic; }
+.dialog input[type="search"] { background: var(--field); border: 1px solid var(--border); border-radius: 10px;
+                               padding: 10px 12px; font-size: 16px; color: var(--text); }
 .trash { list-style: none; margin: 0 0 12px; padding: 0; max-height: 60vh; overflow-y: auto; }
 .trash li { display: flex; gap: 10px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--border); }
 .trash li.info { color: var(--muted); justify-content: center; border: none; }
@@ -329,6 +343,9 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
          background: var(--navy); color: #fff; padding: 10px 16px; border-radius: 10px; font-weight: 600;
          opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; text-align: center; }
 #toast.show { opacity: 1; }
+#toast.show.undo { pointer-events: auto; }
+.toast-undo { margin-left: 10px; background: none; border: 1px solid rgba(255, 255, 255, .5); color: #fff;
+              border-radius: 8px; padding: 4px 12px; font-weight: 700; min-height: 0; }
 
 /* preparing vs. connected to the laptop */
 body:not(.connected) .conn-only { display: none !important; }

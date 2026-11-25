@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="stylesheet" href="style.css?v=1.23">
+<link rel="stylesheet" href="style.css?v=1.24">
 <title>Bible Present Mobile</title>
 </head>
 <body>
@@ -198,6 +198,7 @@
     <!-- preparing (anywhere) -->
     <div class="list-head prep-only">
       <select id="list-select" aria-label="List"></select>
+      <button id="list-browse" class="ghost small">My lists</button>
       <button id="list-new" class="ghost small">New list</button>
       <button id="list-delete" class="ghost small" title="Delete this list">Delete</button>
       <button id="list-menu" class="ghost small" aria-label="More: recently deleted, backup, help">⋯</button>
@@ -236,7 +237,7 @@
         <button id="ctl-next" class="nav">Next ▶</button>
       </div>
       <div class="ctl-row">
-        <button id="ctl-blank" class="blank">Blank</button>
+        <button id="ctl-blank" class="blank">■ Stop<span class="wide-only"> presenting</span></button>
         <div class="seg" id="ctl-show"></div>
       </div>
     </div>
@@ -245,6 +246,6 @@
 
 <div id="overlay" class="overlay hidden"><div class="dialog" id="dialog"></div></div>
 <div id="toast" role="status"></div>
-<script src="app.js?v=1.23"></script>
+<script src="app.js?v=1.24"></script>
 </body>
 </html>

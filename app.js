@@ -102,11 +102,22 @@ function newList(name) {
   return { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: name || "", items: [] };
 }
 const currentList = () => state.lists.find((l) => l.id === state.current);
-function saveLists() { store.set("lists", state.lists); store.set("current", state.current); scheduleSync(); }
+function saveLists() { stampChanged(); store.set("lists", state.lists); store.set("current", state.current); scheduleSync(); }
+/** When each list was last changed (for My lists): l.changed, from a fingerprint of each list. */
+const listMemo = new Map();
+function stampChanged() {
+  for (const l of state.lists) {
+    const h = listHash(l);
+    if (listMemo.get(l.id) !== h && (listMemo.has(l.id) || !l.changed)) l.changed = Date.now();
+    listMemo.set(l.id, h);
+  }
+}
+for (const l of state.lists) listMemo.set(l.id, listHash(l));
 
 function toast(text) {
   const t = $("toast");
   t.textContent = text;
+  t.classList.remove("undo");
   t.classList.add("show");
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => t.classList.remove("show"), 2200);
@@ -712,6 +723,65 @@ function renderLists() {
   sel.value = state.current;
   $("list-name").value = currentList().name;
 }
+function deleteList(l) {
+  closeNoteEditor(); closeFormat();
+  const kept = l.items.length ? trashPut({ type: "list", list: l }) : null;
+  const at = state.lists.indexOf(l);
+  state.lists = state.lists.filter((x) => x !== l);
+  if (!state.lists.length) state.lists.push(newList());
+  if (state.current === l.id) state.current = state.lists[Math.max(0, at - 1)].id;
+  saveLists(); renderList();
+  if (l.items.length || l.name) toastUndo(`Deleted “${l.name || "List"}”`, () => {
+    trashDrop(kept);
+    if (state.lists.some((x) => x.id === l.id)) return;
+    state.lists = state.lists.filter((x) => x.items.length || x.name);  // the empty one made in its place
+    state.lists.splice(Math.min(at, state.lists.length), 0, l);
+    state.current = l.id;
+    saveLists(); renderList();
+  });
+}
+/** All lists at a glance, the last changed first: tap one to continue with it. */
+function showMyLists() {
+  const what = (l) => {
+    const notes = l.items.map((it) => noteText(isNote(it) ? it.text : it.note)).filter(Boolean);
+    return { refs: passages(l.items).map(itemLabel).join(" · "), notes: notes.join(" · ") };
+  };
+  showDialog(`<h2>My lists</h2>
+    <input id="ml-find" type="search" autocomplete="off" placeholder="Find a list: its name, a passage or words from a note">
+    <ul class="my-lists" id="ml"></ul>
+    <div class="buttons"><button id="ml-new" class="ghost">＋ New list</button>
+      <button id="ml-close" class="primary">Close</button></div>`, (d) => {
+    d.classList.add("wide");
+    const ul = d.querySelector("#ml"), find = d.querySelector("#ml-find");
+    const fill = () => {
+      const words = fold(find.value).split(/\s+/).filter(Boolean);
+      ul.innerHTML = "";
+      const lists = [...state.lists].sort((a, b) => (b.changed || 0) - (a.changed || 0));
+      for (const l of lists) {
+        const w = what(l);
+        if (words.length && !words.every((x) => fold(`${l.name} ${w.refs} ${w.notes}`).includes(x))) continue;
+        const li = el("li", l.id === state.current ? "current" : "");
+        const body = el("div", "body");
+        body.append(el("div", "label", l.name || "Unnamed list"),
+                    el("div", "meta", countText(l.items) + (l.changed ? ` · changed ${ago(l.changed)}` : "")));
+        if (w.refs) body.append(el("div", "snip", w.refs));
+        if (w.notes) body.append(el("div", "snip note", w.notes.slice(0, 200)));
+        li.append(body);
+        li.onclick = () => {
+          closeNoteEditor(); closeFormat();
+          state.current = l.id; saveLists(); renderList(); closeDialog();
+          setMode("list");
+        };
+        ul.append(li);
+      }
+      if (!ul.children.length) ul.append(el("li", "info", "No list found."));
+    };
+    find.addEventListener("input", fill);
+    fill();
+    d.querySelector("#ml-new").onclick = () => { closeDialog(); $("list-new").click(); };
+    d.querySelector("#ml-close").onclick = closeDialog;
+  });
+}
 function renderList() {
   if (conn.info) return renderRemote();
   const list = currentList(), ul = $("list-items");
@@ -750,9 +820,19 @@ function renderList() {
     del.title = "Remove";
     del.onclick = () => {
       if (noteSession && noteSession.target === it) { noteSession = null; $("note-pane").classList.add("hidden"); }
-      if (noteText(isNote(it) ? it.text : it.note)) trashPut({ type: "item", listId: list.id, listName: list.name, item: it, index: i });
+      const kept = noteText(isNote(it) ? it.text : it.note)
+        ? trashPut({ type: "item", listId: list.id, listName: list.name, item: it, index: i }) : null;
       list.items.splice(i, 1); saveLists(); renderList();
       if (noteSession && noteSession.all) openAllNotes();  // the document follows the list
+      toastUndo(`Removed: ${isNote(it) ? "note" : itemLabel(it)}`, () => {
+        trashDrop(kept);
+        const l = state.lists.find((x) => x.id === list.id);
+        if (!l || l.items.includes(it)) return;
+        l.items.splice(Math.min(i, l.items.length), 0, it);
+        state.current = l.id;
+        saveLists(); renderList();
+        if (noteSession && noteSession.all) openAllNotes();
+      });
     };
     li.append(grip, el("span", "num", isNote(it) ? "" : ++num), body, ...buttons, del);
     ul.appendChild(li);
@@ -1200,13 +1280,11 @@ function deleteOpenNote() {
   const s = noteSession, ed = $("note-body").querySelector(".note-editor");
   if (!s || s.all || !ed) return;
   const html = cleanNote(ed.innerHTML);
-  if (noteText(html)) {
-    if (!confirm("Delete this note? You can get it back from ⋯ → Recently deleted.")) return;
-    if (s.trash) s.trash(html);
-  }
-  s.remove();
+  const kept = noteText(html) && s.trash ? s.trash(html) : null;
+  const undo = s.remove(html);
   ed.innerHTML = "";
   closeNoteEditor();
+  if (undo && noteText(html)) toastUndo("Note deleted", () => { trashDrop(kept); undo(); });
 }
 function noteChanged(ed) {
   if (!noteSession || !ed || !ed._note) return;
@@ -1413,10 +1491,18 @@ function listNote(it, list) {
     save: (h) => { if (free) it.text = h; else it.note = h; saveLists(); },
     trash: (h) => trashPut(free ? { type: "item", listId: list.id, listName: list.name, item: { kind: "note", text: h } }
                                 : { type: "note", listId: list.id, listName: list.name, label: itemLabel(it), html: h }),
-    remove: () => {
+    /** Removes the note; returns how to put it back (Undo). */
+    remove: (h) => {
+      const at = list.items.indexOf(it);
       if (!free) delete it.note;
-      else if (list.items.includes(it)) list.items.splice(list.items.indexOf(it), 1);
+      else if (at >= 0) list.items.splice(at, 1);
       saveLists();
+      return () => {
+        if (!free) it.note = h;
+        else if (!list.items.includes(it)) { it.text = h; list.items.splice(Math.min(at, list.items.length), 0, it); }
+        state.current = list.id;
+        saveLists(); renderList();
+      };
     },
   };
 }
@@ -1461,7 +1547,24 @@ function addFreeNote() {
 const TRASH_DAYS = 30;
 const trashGet = () => store.get("trash", []).filter((x) => Date.now() - x.t < TRASH_DAYS * 864e5);
 function trashPut(entry) {
-  store.set("trash", [{ t: Date.now(), ...JSON.parse(JSON.stringify(entry)) }, ...trashGet()].slice(0, 300));
+  const x = { t: Date.now() + Math.random(), ...JSON.parse(JSON.stringify(entry)) };
+  store.set("trash", [x, ...trashGet()].slice(0, 300));
+  return x;
+}
+/** Undone: out of Recently deleted again. */
+function trashDrop(x) {
+  if (x) store.set("trash", trashGet().filter((y) => y.t !== x.t));
+}
+/** A message with an Undo button, for a few seconds. */
+function toastUndo(text, undo) {
+  const t = $("toast");
+  t.textContent = text + " ";
+  const b = el("button", "toast-undo", "Undo");
+  b.onclick = () => { t.classList.remove("show"); undo(); };
+  t.append(b);
+  t.classList.add("show", "undo");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 6000);
 }
 function trashLabel(x) {
   if (x.type === "list") return [`List “${x.list.name || "unnamed"}”`, countText(x.list.items) + (x.why ? ` · ${x.why}` : "")];
@@ -1602,7 +1705,7 @@ const installed = () => navigator.standalone === true || matchMedia("(display-mo
    which never leaves the devices; the server only sees a group number (a hash of the code) and
    unreadable records, one per list. Connecting to a laptop to present has nothing to do with this.
    store "sync": {code, device, since, recs: {listId: {ver, hash} | {ver, deleted: true}}, last, error} */
-const SYNC_URL = "";  // the server, once it runs
+const SYNC_URL = "https://bp-sync.joshua-eijbersen.workers.dev";  // sync-server/worker.js
 const syncUrl = () => store.get("syncUrl", SYNC_URL);
 const syncState = () => store.get("sync", null);
 const CODE_CHARS = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";  // no I, L, O, U: they look like other characters
@@ -1688,7 +1791,12 @@ async function runSync() {
   try {
     const { key, group } = await syncKeys(st.code);
     const editing = Boolean(noteSession || fmtSession);  // an open note or format pane: only send, take in later
+    const joining = !st.since;
     if (!editing) changed = await syncPull(st, key, group);
+    if (joining && changed) {  // just joined: the empty starter list of this device is not needed
+      const keep = state.lists.filter((l) => l.items.length || l.name || st.recs[l.id]);
+      if (keep.length) state.lists = keep;
+    }
     changed = (await syncPush(st, key, group, editing)) || changed;
     st.last = Date.now();
     st.error = "";
@@ -1739,10 +1847,12 @@ async function syncTakeIn(st, key, id, ver, data) {
     st.recs[id] = { ver, deleted: true };
     return Boolean(local);
   }
-  const list = { id, name: String((p.list && p.list.name) || ""), items: ((p.list && p.list.items) || []).filter(validItem) };
+  const list = { id, name: String((p.list && p.list.name) || ""), items: ((p.list && p.list.items) || []).filter(validItem),
+                 changed: (p.list && p.list.changed) || p.t || Date.now() };
   const hash = listHash(list);
+  listMemo.set(id, hash);
   if (!local) state.lists.push(list);
-  else if (!dirty || listHash(local) === hash) { local.name = list.name; local.items = list.items; }
+  else if (!dirty || listHash(local) === hash) { local.name = list.name; local.items = list.items; local.changed = list.changed; }
   else {  // changed on both: the other device's version takes this place, this one becomes a copy
     local.id = newList().id;
     local.name = `${local.name || "List"} (${st.device}, ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`;
@@ -1772,7 +1882,7 @@ async function syncPush(st, key, group, editing) {
     if (!rec && !l.items.length && !l.name) continue;  // a new, empty list: once it has something
     const hash = listHash(l);
     if (rec && !rec.deleted && rec.hash === hash) continue;
-    const data = await syncSeal({ list: { name: l.name, items: l.items }, device: st.device, t: Date.now() }, key);
+    const data = await syncSeal({ list: { name: l.name, items: l.items, changed: l.changed }, device: st.device, t: Date.now() }, key);
     const r = await syncSend(group, l.id, rec ? rec.ver : 0, data);
     if (r.ver) st.recs[l.id] = { ver: r.ver, hash };
     else await handle(r, l.id);
@@ -1928,13 +2038,18 @@ const HELP = [
     <li><b>Search the text</b> of all sermons and tap a result to open the sermon at that paragraph. The words are marked.</li>
     <li><b>Find in this sermon</b>: words or a paragraph number (<code>14</code>). It also looks in the other language:
         English words find the paragraph while you read Dutch (marked “found in EN”), and the other way round.</li>
-    <li>NL / EN above the paragraphs switches the language you read on the iPad. Tap paragraphs to select them, like verses.</li></ul>
+    <li>Clear <b>Find in this sermon</b> (×) to see all paragraphs again: the list stays at the paragraph you selected.</li>
+    <li>NL / EN above the paragraphs switches the language you read on the iPad. Tap paragraphs to select them, like verses;
+        <b>Copy</b> copies them with the sermon code and title.</li></ul>
     <p class="note-box">On the screen the laptop shows the paragraph in its own two languages, whichever language you read here
        (Settings → App → Sermons on the laptop). Paragraph numbers are the same in every language.</p>`],
   ["Making a list", `
     <ul><li>Select verses or paragraphs and tap <b>＋ Add to list</b>. Typing several in Go to… adds them all: <code>joh 3:16; ps 23:1-4; 56-0401M 12</code>.</li>
-    <li>Drag <b>⠿</b> to change the order, <b>✕</b> removes. Tap an item to see it on the left.</li>
-    <li>The list box at the top switches between lists; <b>New list</b> starts one.</li></ul>
+    <li>Drag <b>⠿</b> to change the order, <b>✕</b> removes (<b>Undo</b> in the message at the bottom puts it back, note and all). Tap an item to see it on the left.</li>
+    <li>Keep as many lists as you like, each with its notes: one per service, Bible study or topic. <b>New list</b> starts one.</li>
+    <li><b>My lists</b> shows all of them, the last changed first, with their passages and the start of the notes.
+        Find one by its name, a passage or words from a note, and tap it to continue with it. The box at the top switches quickly too.</li>
+    <li><b>Delete</b> deletes the list shown; <b>Undo</b> brings it back, and ⋯ → Recently deleted keeps it for 30 days.</li></ul>
     <img class="help-anim" data-src="help/add-passage.webp" alt="Selecting John 3:16 to 18 and adding it to the list">
     <img class="help-anim" data-src="help/reorder.webp" alt="Dragging Psalm 23:4 higher up in the list">`],
   ["Formatting the text on the screen", `
@@ -1975,7 +2090,8 @@ const HELP = [
     <li><b>Share</b> sends it as plain text (mail, messages…).</li></ul>`],
   ["Getting the list to the laptop", `
     <ul><li><b>Connect to laptop</b> (same Wi-Fi): on the laptop, Bible Present → <b>iPad</b> → switch it on, then enter the address and the 4-digit code.
-       Your list goes along, and the iPad becomes the presenting console: tap an item to put it on the screen, Next/Previous, Blank, languages.</li>
+       Your list goes along, and the iPad becomes the presenting console: tap an item to put it on the screen, Next/Previous, languages.
+       <b>■ Stop presenting</b> makes the screen blank; <b>▶ Present</b> shows the text again.</li>
     <li>The languages on the screen are the laptop's (see <i>Finding Bible verses</i>). The three language buttons in the console choose
        whether the screen shows both, or only the top or the bottom one.</li>
     <li>Your notes stay on the iPad: the console shows them in their places in the service list, only for you.</li>
@@ -1989,6 +2105,7 @@ const HELP = [
     <li><b>⋯ → Back up all lists and notes</b> makes one file; save it in Files or iCloud Drive. <b>Restore from a backup file</b> adds the lists from such a file again (nothing is overwritten).
         If there has been no backup for two weeks, the app reminds you.</li>
     <li>Keep the app on the Home Screen: Safari may clear the data of websites you have not opened for a while.</li>
+    <li>Deleted something just now? Tap <b>Undo</b> in the message at the bottom.</li>
     <li>Syncing with your other devices (below) also keeps a copy of everything on each of them.</li></ul>`],
   ["Syncing your iPad, laptop and phone", `
     <p>Write notes on your laptop at home and have them on your iPad (and the other way round): your own devices keep the
@@ -2003,6 +2120,9 @@ const HELP = [
     <li>A list deleted on one device is deleted on the others too, and goes to their <b>Recently deleted</b>.</li>
     <li>Everything is encrypted with your sync code before it leaves the device: the server cannot read it.
         Anyone with the code can, so keep it to yourself.</li>
+    <li>Each person starts their own sync and gets their own code: other people's lists never mix with yours.
+        Someone you work with can start their own, or join yours to share all lists.</li>
+    <li>It also works as a backup: a new or reset iPad gets everything back by joining with the code (write it down somewhere safe).</li>
     <li>On a laptop, Chrome and Edge can install it as an app (the install icon in the address bar): its own window, and it works offline.</li></ul>`, "sync"],
 ];
 function showHelp() {
@@ -2778,12 +2898,11 @@ function askCode(prefill, error) {
     watchdog reconnects as soon as it stays away. */
 function applyState(s) {
   if (!s || (conn.remote && s.version < conn.remote.version)) return;  // never go back to older news
-  const first = !conn.remote;
   conn.remote = s;
   conn.lastNews = Date.now();
   $("conn").classList.remove("lost");
-  renderRemote();
-  if (first && conn.handoff) offerHandoff();
+  try { renderRemote(); }
+  finally { if (conn.handoff) offerHandoff(); }  // the question about the list always comes, once
 }
 function openStream() {
   if (conn.events) conn.events.close();
@@ -3009,11 +3128,11 @@ function renderRemote() {
   $("live-badge").textContent = L.on_air ? "● LIVE" : L.blank ? "BLANK" : L.hidden ? "HIDDEN" : "NOT LIVE";
   $("live-ref").textContent = L.ref || "";
   $("live-text").textContent = L.on_air && L.parts.length ? L.parts[0].text
-    : L.blank ? "The screen is blank. Tap Show text to bring it back."
+    : L.blank ? "The screen is blank. Tap Present to show the text again."
     : L.hidden ? "The output screen on the laptop is hidden."
     : "Nothing on screen yet. Tap an item, or choose a verse and tap Go live.";
   const blank = $("ctl-blank");
-  blank.textContent = L.blank ? "Show text" : "Blank";
+  blank.innerHTML = L.blank ? "▶ Present" : '■ Stop<span class="wide-only"> presenting</span>';
   blank.classList.toggle("on", !!L.blank);
   const seg = $("ctl-show");
   seg.innerHTML = "";
@@ -3176,16 +3295,8 @@ async function init() {
   $("list-select").onchange = (e) => { closeNoteEditor(); closeFormat(); state.current = e.target.value; saveLists(); renderList(); };
   $("list-name").addEventListener("input", (e) => { currentList().name = e.target.value; saveLists(); renderLists(); });
   $("list-new").onclick = () => { closeNoteEditor(); const l = newList(); state.lists.push(l); state.current = l.id; saveLists(); renderList(); $("list-name").focus(); };
-  $("list-delete").onclick = () => {
-    const l = currentList();
-    if (l.items.length && !confirm(`Delete “${l.name || "this list"}” (${countText(l.items)})?`)) return;
-    closeNoteEditor();
-    if (l.items.length) trashPut({ type: "list", list: l });
-    state.lists = state.lists.filter((x) => x.id !== l.id);
-    if (!state.lists.length) state.lists.push(newList());
-    state.current = state.lists[0].id;
-    saveLists(); renderList();
-  };
+  $("list-delete").onclick = () => deleteList(currentList());
+  $("list-browse").onclick = showMyLists;
   $("list-note").onclick = addFreeNote;
   $("list-all-notes").onclick = openAllNotes;
   $("remote-notes").onclick = openAllConsoleNotes;
