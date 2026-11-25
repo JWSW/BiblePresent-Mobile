@@ -174,8 +174,11 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
 .addbar .primary { background: var(--coral); border-color: var(--coral); }
 
 /* the list */
-.list-head { display: flex; gap: 6px; margin-bottom: 8px; }
-.list-head select { flex: 1; min-width: 0; }
+.list-head { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.list-head select { flex: 1 1 100%; min-width: 0; text-overflow: ellipsis; }  /* the list box on its own row */
+.list-head button { flex: 1 1 0; min-width: 0; padding: 6px 6px; white-space: nowrap; font-size: 14px; }
+.list-head #list-menu { flex: 0 0 44px; display: inline-flex; align-items: center; justify-content: center; padding: 6px 14px; }
+.dots { width: 18px; height: 4px; display: block; fill: currentColor; }
 .list-name { margin-bottom: 8px; font-weight: 700; }
 #list-items { padding: 4px; }
 #list-items li { display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 8px;
