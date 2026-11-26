@@ -955,7 +955,7 @@ async function openFormat(s) {
     const clear = el("button", "fmt-unclear", "Clear");  // this verse / paragraph back to plain text
     clear.type = "button";
     clear.setAttribute("aria-label", `Clear the formatting of ${label}`);
-    clear.onclick = () => { ed.innerHTML = esc(text).replace(/\n/g, "<br>"); saveFormat(); };
+    clear.onclick = () => { ed.innerHTML = esc(text).replace(/\n/g, "<br>"); saveFormat(true); };
     side.append(el("span", "", label), clear);
     row.append(side, ed);
     body.append(row);
@@ -974,10 +974,13 @@ function fmtResult() {
   }
   return Object.keys(units).length ? { src: fmtSession.source.src, units } : null;
 }
-function saveFormat() {
+/** Saved only after a change here: just opening and closing never replaces formatting made elsewhere
+    (e.g. on the laptop, in a Bible this device does not show). */
+function saveFormat(changed) {
   if (!fmtSession) return;
   fmtMarkRows();
-  fmtSession.save(fmtResult());
+  if (changed) fmtSession.changed = true;
+  if (fmtSession.changed) fmtSession.save(fmtResult());
 }
 /** The Clear button of a verse / paragraph only shows while it has formatting. */
 function fmtMarkRows() {
@@ -1035,7 +1038,7 @@ function initFormatPane() {
   });
   body.addEventListener("paste", (e) => e.preventDefault());
   body.addEventListener("drop", (e) => e.preventDefault());
-  body.addEventListener("input", saveFormat);
+  body.addEventListener("input", () => saveFormat(true));
   // a tap on a word selects that word (the handles then make the selection bigger)
   body.addEventListener("click", () => {
     const sel = getSelection();
@@ -1071,13 +1074,13 @@ function initFormatPane() {
         document.execCommand("foreColor", false, b.dataset.color ? editorColor(b.dataset.color) : getComputedStyle(body).color);
         document.execCommand("styleWithCSS", false, false);
       }
-      saveFormat();
+      saveFormat(true);
     };
   }
   $("fmt-clear").onclick = () => {
     if (!confirm("Remove all formatting of this item?")) return;
     for (const ed of body.querySelectorAll(".fmt-text")) ed.innerHTML = esc(ed._unit.text).replace(/\n/g, "<br>");
-    saveFormat();
+    saveFormat(true);
   };
   $("fmt-done").onclick = () => closeFormat();
 }
@@ -1943,6 +1946,8 @@ function syncDialog(joinCode) {
     <label class="field-label" for="s-code">Joining? The sync code from your other device</label>
     <input id="s-code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false"
            placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" value="${joinCode ? showSyncCode(joinCode) : ""}">
+    <p class="hint"><b>With the camera:</b> on an iPad or iPhone, tap the box above, then <b>Scan Text</b> (the icon with the
+       square brackets above the keyboard, or touch and hold the box) and point the camera at the code on your other device.</p>
     <p class="hint">The lists on this device are added to the synced ones; nothing is overwritten.</p>
     <div class="buttons"><button id="s-cancel" class="ghost">Cancel</button>
       <button id="s-new" class="ghost">Start syncing (new code)</button>
@@ -2112,7 +2117,9 @@ const HELP = [
        same lists and notes. This is separate from connecting to a laptop to present: that never changes your lists.</p>
     <ol><li>On the first device: <b>⋯ → Sync with my other devices… → Start syncing</b>. You get a <b>sync code</b>.</li>
     <li>On the other device: open Bible Present Mobile (on a laptop: <i>jwsw.github.io/BiblePresent-Mobile</i> in Chrome, Edge or Safari),
-        then <b>⋯ → Sync with my other devices… → Join</b> and type the code. Or open the link from <b>Copy link</b> on that device.</li>
+        then <b>⋯ → Sync with my other devices… → Join</b> and type the code. On an iPad you can also scan it:
+        tap the code box, then <b>Scan Text</b> above the keyboard, and point the camera at the code on the other screen.
+        On a laptop, opening the link from <b>Copy link</b> works too.</li>
     <li>That's all: changes go along by themselves within seconds when there is internet, and otherwise as soon as there is.</li></ol>
     <ul><li>Lists that were already on a device are added; nothing is overwritten.</li>
     <li>If the same list was changed on two devices before they could sync, both are kept: the second one with the device's name
@@ -3180,6 +3187,7 @@ async function followLive(pos) {
 
 /* Preparing (GitHub version): open the laptop's page, taking the current list along. */
 function connectDialog(restore = false) {
+  restore = restore === true;
   const list = currentList();
   const saved = store.get("laptop", "biblepresent.local:8080");
   showDialog(`<h2>${restore ? "Restore from the laptop" : "Connect to the laptop"}</h2>
@@ -3307,7 +3315,7 @@ async function init() {
   $("note-pdf").onclick = () => exportAllNotes("pdf");
   $("share-file").onclick = shareFile;
   $("share-text").onclick = shareText;
-  $("connect-btn").onclick = connectDialog;
+  $("connect-btn").onclick = () => connectDialog(false);  // not the click event: that would mean "restore"
   $("back-btn").onclick = backToLists;
   $("addbar-live").onclick = presentSelection;
   $("ctl-next").onclick = () => { followNext(); cmd("next"); };
