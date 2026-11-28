@@ -107,12 +107,13 @@ function saveLists() { stampChanged(); store.set("lists", state.lists); store.se
 const listMemo = new Map();
 function stampChanged() {
   for (const l of state.lists) {
+    ensureUids(l);  // new items get their id here
     const h = listHash(l);
     if (listMemo.get(l.id) !== h && (listMemo.has(l.id) || !l.changed)) l.changed = Date.now();
     listMemo.set(l.id, h);
   }
 }
-for (const l of state.lists) listMemo.set(l.id, listHash(l));
+for (const l of state.lists) { ensureUids(l); listMemo.set(l.id, listHash(l)); }
 
 function toast(text) {
   const t = $("toast");
@@ -1251,7 +1252,7 @@ function openNoteEditor(s) {
       const ed = n.save ? makeEditor(n) : null;
       if (n.heading) {
         const h = el("div", "all-ref");
-        h.append(el("span", "ref", n.heading), el("span", "sub", n.sub || ""));
+        h.append(el("span", "ref", n.heading), n.passage ? passageFold(n.passage, n.sub) : el("span", "sub", n.sub || ""));
         if (ed) h.onclick = () => placeCaretAtEnd(ed);
         body.append(h);
       }
@@ -1573,7 +1574,7 @@ function trashLabel(x) {
   if (x.type === "list") return [`List “${x.list.name || "unnamed"}”`, countText(x.list.items) + (x.why ? ` · ${x.why}` : "")];
   if (x.type === "note") return [`Note on ${x.label}`, noteText(x.html)];
   const it = x.item;
-  return [isNote(it) ? "Note" : itemLabel(it), noteText(isNote(it) ? it.text : it.note)];
+  return [isNote(it) ? "Note" : itemLabel(it), noteText(isNote(it) ? it.text : it.note) + (x.why ? ` · ${x.why}` : "")];
 }
 function restoreTrash(x) {
   if (x.type === "list") {
@@ -1757,9 +1758,57 @@ async function syncOpen(text, key) {
   if (all[1]) bytes = await gz(bytes, "out");
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+/* What counts as a change: not the preview line of a sermon item (each device fills that in itself). */
+function syncJson(v) { return JSON.stringify(v, (k, x) => (k === "snippet" ? undefined : x)); }
 /** A short fingerprint of a list: tells whether it changed here since the last sync. */
-function listHash(l) {
-  const s = JSON.stringify([l.name || "", l.items]);
+function listHash(l) { return strHash(syncJson([l.name || "", l.items])); }
+/** Every item gets a lasting id (u), so two versions of a list can be merged item by item. Made from the
+    item itself, so devices that have the same list give its items the same ids. */
+function ensureUids(list) {
+  const used = new Set(list.items.map((it) => it.u).filter(Boolean));
+  for (const it of list.items) {
+    if (it.u) continue;
+    const base = "h" + strHash(syncJson(it));
+    let n = 0;
+    while (used.has(`${base}.${n}`)) n++;
+    it.u = `${base}.${n}`;
+    used.add(it.u);
+  }
+}
+/** Three-way merge of a list changed on two devices since `base` (the last version both had; null: unknown).
+    Changed on one side: that change. Added or deleted on either side: kept so. The same item changed on
+    both: the newer list's version; the other one is returned in `lost` (for Recently deleted). */
+function mergeLists(base, local, remote) {
+  const same = (a, b) => syncJson(a) === syncJson(b);
+  const B = new Map(((base && base.items) || []).map((it) => [it.u, it]));
+  const L = new Map(local.items.map((it) => [it.u, it])), R = new Map(remote.items.map((it) => [it.u, it]));
+  const localNewer = (local.changed || 0) > (remote.changed || 0);
+  const out = [], lost = [];
+  for (const r of remote.items) {
+    const b = B.get(r.u), l = L.get(r.u);
+    if (!l) { if (!(b && same(b, r))) out.push(r); continue; }  // deleted here and not changed there: stays deleted
+    if (same(l, r) || (b && same(b, l))) out.push(r);         // the same, or only changed there
+    else if (b && same(b, r)) out.push(l);                     // only changed here
+    else { out.push(localNewer ? l : r); lost.push(localNewer ? r : l); }  // changed on both
+  }
+  local.items.forEach((l, i) => {  // added here (or changed here while deleted there): in its place
+    if (R.has(l.u)) return;
+    const b = B.get(l.u);
+    if (b && same(b, l)) return;  // deleted there and not changed here
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const k = out.findIndex((o) => o.u === local.items[j].u);
+      if (k >= 0) { at = k + 1; break; }
+    }
+    out.splice(at, 0, l);
+  });
+  const bn = base ? base.name : null;
+  const name = local.name === remote.name || bn === local.name ? remote.name : bn === remote.name ? local.name
+    : localNewer ? local.name : remote.name;
+  return { name, items: out, lost };
+}
+const syncCopy = (l) => JSON.parse(JSON.stringify({ name: l.name || "", items: l.items }));
+function strHash(s) {
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
@@ -1852,20 +1901,34 @@ async function syncTakeIn(st, key, id, ver, data) {
   }
   const list = { id, name: String((p.list && p.list.name) || ""), items: ((p.list && p.list.items) || []).filter(validItem),
                  changed: (p.list && p.list.changed) || p.t || Date.now() };
+  ensureUids(list);
   const hash = listHash(list);
-  listMemo.set(id, hash);
   if (!local) state.lists.push(list);
-  else if (!dirty || listHash(local) === hash) { local.name = list.name; local.items = list.items; local.changed = list.changed; }
-  else {  // changed on both: the other device's version takes this place, this one becomes a copy
-    local.id = newList().id;
-    local.name = `${local.name || "List"} (${st.device}, ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })})`;
-    state.lists.splice(state.lists.indexOf(local), 0, list);
-    if (state.current === id) state.current = local.id;
-    toast(`“${list.name || "List"}” was changed on two devices: both are kept`);
+  else if (!dirty || listHash(local) === hash) {
+    keepSnippets(list.items, local.items);
+    local.name = list.name; local.items = list.items; local.changed = list.changed;
+  } else {  // changed on both devices: merged (see mergeLists); the merged list is sent back
+    ensureUids(local);
+    const m = mergeLists(rec && !rec.deleted ? rec.base : null, local, list);
+    keepSnippets(m.items, local.items);
+    local.name = m.name;
+    local.items = m.items;
+    local.changed = Math.max(local.changed || 0, list.changed || 0);
+    for (const old of m.lost) {
+      trashPut({ type: "item", listId: id, listName: local.name, item: old, why: "changed on two devices; the newer version was kept" });
+    }
+    if (m.lost.length) toast(`“${local.name || "List"}” was changed on two devices at once: merged (the older version of ` +
+                             `${m.lost.length === 1 ? "one item" : `${m.lost.length} items`} is in Recently deleted)`);
     sync.again = true;
   }
-  st.recs[id] = { ver, hash };
+  listMemo.set(id, listHash(local || list));
+  st.recs[id] = { ver, hash, base: syncCopy(list) };
   return true;
+}
+/** The preview lines this device already filled in stay (they are not synced as changes). */
+function keepSnippets(items, from) {
+  const had = new Map(from.filter((it) => it.snippet).map((it) => [it.u, it.snippet]));
+  for (const it of items) if (!it.snippet && had.has(it.u)) it.snippet = had.get(it.u);
 }
 async function syncSend(group, id, base, data) {
   const res = await fetch(`${syncUrl()}/v1/${group}`, { method: "POST", headers: { "Content-Type": "text/plain" },
@@ -1883,11 +1946,13 @@ async function syncPush(st, key, group, editing) {
   for (const l of [...state.lists]) {
     const rec = st.recs[l.id];
     if (!rec && !l.items.length && !l.name) continue;  // a new, empty list: once it has something
+    ensureUids(l);
     const hash = listHash(l);
     if (rec && !rec.deleted && rec.hash === hash) continue;
-    const data = await syncSeal({ list: { name: l.name, items: l.items, changed: l.changed }, device: st.device, t: Date.now() }, key);
+    const sent = syncCopy(l);  // as it is now (it may change while this is on its way)
+    const data = await syncSeal({ list: { ...sent, changed: l.changed }, device: st.device, t: Date.now() }, key);
     const r = await syncSend(group, l.id, rec ? rec.ver : 0, data);
-    if (r.ver) st.recs[l.id] = { ver: r.ver, hash };
+    if (r.ver) st.recs[l.id] = { ver: r.ver, hash: listHash(sent), base: sent };
     else await handle(r, l.id);
   }
   for (const [id, rec] of Object.entries(st.recs)) {  // deleted here
@@ -2070,12 +2135,16 @@ const HELP = [
         So format verses in the Bible the laptop shows.</li>
     <li>In the console, <b>Aa</b> on an item of the laptop's service list changes it on the laptop right away.
         On the laptop itself: right-click an item in the service list → <b>Format text…</b></li>
-    <li><b>Aa</b> in blue: the item has formatting.</li></ul>`],
+    <li><b>Aa</b> in blue: the item has formatting.</li>
+    <li>To show everything plain for a while (another occasion, the same list): on the laptop, Service list <b>⋯</b> →
+        <b>Show formatting on the screen</b> switches it off and on again (also in Settings → Presentation).</li>
+    <li>Formatting also shows in <b>Outline</b> (and Word and PDF) and when a passage's text is unfolded in <b>All notes</b>.</li></ul>`],
   ["Notes", `
     <ul><li><b>＋ Note</b> adds a note between the passages, for an introduction, a bridge or a reminder. Drag it into place.</li>
     <li><b>✎</b> on a passage gives that passage its own note; the verse or quote is shown above it while you write.</li>
     <li>A note opens on the left. Tap another note in the list to switch; <b>Done</b> closes it. An empty note is removed.</li>
-    <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between. Write anywhere: under a passage that has no note yet too (“Add a note…”).
+    <li><b>All notes</b> (under the list) shows every note of the list as one document, in the order of the list, with the passages as headings in between.
+        <b>▾ whole text</b> next to a passage unfolds all its verses or paragraphs (with their formatting); <b>▴ fold shut</b> folds them again. Write anywhere: under a passage that has no note yet too (“Add a note…”).
         <b>Word</b> and <b>PDF</b> at the top make a document of it (the references and your notes; for the full texts too, use Outline).</li>
     <li>The toolbar: Title, Heading, Subheading and Body; <b>B</b> <i>I</i> <u>U</u> <s>S</s>; the marker (tap <b>A</b>, then a colour; ✕ removes it);
         <b>Aa</b> for the colour of the text and the font (Serif, Rounded, Typewriter, Handwriting); bullets, numbers and a checklist (tap the circle to tick it off).
@@ -2086,7 +2155,8 @@ const HELP = [
     <img class="help-anim" data-src="help/all-notes.webp" alt="All notes of the list as one document, and writing under Hebrews 11:1">`],
   ["Outline, Word and PDF", `
     <p><b>Outline</b> (under the list) shows the whole list as you will go through it: your notes, the references and the full texts.
-       Switch off <i>With the Bible and sermon texts</i> for just the references and your notes.</p>
+       Choose what goes in: <i>Bible and sermon texts</i>, <i>Their formatting</i> (bold, colours as made with <b>Aa</b>) and
+       <i>My notes</i>. Word, PDF and Share follow the same choices; for example only the verses and quotes, without notes.</p>
     <p><b>Language</b> puts the book names, the Bible text (SV, KJV or LSG) and the sermon texts in that language; your notes stay as you wrote them.
        Verse numbers are converted where Bibles count differently (SV Psalm 51:3 is Psalm 51:1 in the KJV).
        A sermon that Message Hub does not have in that language keeps its own language.</p>
@@ -2122,8 +2192,9 @@ const HELP = [
         On a laptop, opening the link from <b>Copy link</b> works too.</li>
     <li>That's all: changes go along by themselves within seconds when there is internet, and otherwise as soon as there is.</li></ol>
     <ul><li>Lists that were already on a device are added; nothing is overwritten.</li>
-    <li>If the same list was changed on two devices before they could sync, both are kept: the second one with the device's name
-        and the date after its name, e.g. <i>Sunday (iPad, 24 Nov)</i>.</li>
+    <li>If the same list was changed on two devices before they could sync, the changes are put together: a note added on one
+        and a passage added on the other both end up in the list. Only when the very same item was changed on both does the newer
+        version win; the other one goes to <b>Recently deleted</b>, so nothing is lost.</li>
     <li>A list deleted on one device is deleted on the others too, and goes to their <b>Recently deleted</b>.</li>
     <li>Everything is encrypted with your sync code before it leaves the device: the server cannot read it.
         Anyone with the code can, so keep it to yourself.</li>
@@ -2298,9 +2369,12 @@ function showOutline(list = currentList(), texts = null) {
   if (!list.items.length) return toast("The list is empty.");
   textsOverride = texts;
   showDialog(`<h2>${esc(list.name || "Outline")}</h2>
-    <div class="o-options"><label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> With the Bible and sermon texts</label>
+    <div class="o-options"><label class="o-texts"><input type="checkbox" id="o-texts" ${withTexts() ? "checked" : ""}> Bible and sermon texts</label>
+      <label class="o-texts"><input type="checkbox" id="o-fmt" ${outlineFmt() ? "checked" : ""}> Their formatting</label>
+      <label class="o-texts"><input type="checkbox" id="o-notes" ${withNotes() ? "checked" : ""}> My notes</label>
       <label class="o-lang">Language <select id="o-lang">${Object.entries(EXPORT_LANGS).map(([k, v]) =>
         `<option value="${k}" ${k === exportLang() ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+    <p class="o-loading hidden" id="o-wait"></p>
     <div class="outline" id="outline"></div>
     <div class="buttons"><button id="o-word" class="ghost">Word</button><button id="o-print" class="ghost">PDF / Print</button>
       <button id="o-share" class="ghost">Share</button><button id="o-close" class="primary">Close</button></div>`, (d) => {
@@ -2310,10 +2384,13 @@ function showOutline(list = currentList(), texts = null) {
       if (texts === null) store.set("outlineTexts", e.target.checked); else textsOverride = e.target.checked;
       renderOutline(list);
     };
+    d.querySelector("#o-fmt").onchange = (e) => { store.set("outlineFmt", e.target.checked); renderOutline(list); };
+    d.querySelector("#o-notes").onchange = (e) => { store.set("outlineNotes", e.target.checked); renderOutline(list); };
     d.querySelector("#o-lang").onchange = (e) => {
       store.set("outlineLang", e.target.value);
+      const ready = prepareExport(list);  // sets the "Loading…" line straight away
       renderOutline(list);
-      prepareExport(list).then(() => renderOutline(list));
+      ready.then(() => renderOutline(list));
     };
     d.querySelector("#o-share").onclick = () =>
       sendText(outlineText(list), list.name || "Outline", "Copied the outline.");
@@ -2324,7 +2401,9 @@ function showOutline(list = currentList(), texts = null) {
     renderOutline(list);
   });
   // sermon texts that are not here yet (and the other Bible for another language): load them, then show them
-  prepareExport(list).then(() => renderOutline(list));
+  const ready = prepareExport(list);
+  renderOutline(list);
+  ready.then(() => renderOutline(list));
 }
 async function loadSermonParas(it, lang = sermonLang(it)) {
   if (it.kind !== "sermon" || paraCache[`${lang}/${it.code}`]) return;
@@ -2505,31 +2584,87 @@ function convertVerses(from, to, b, c, v1, v2) {
   }
   return out;
 }
-/** A passage as exported: {label, paras: [[number, text]] or null}, in the chosen language. */
+/** A passage as exported: {label, src, paras: [[number, text, key]] or null}, in the chosen language.
+    src: the Bible id or sermon language of the text; key: the verse ("3:16") or paragraph ("12"), for its formatting.
+    While the other language's Bible is still loading, everything stays in this device's language (never
+    the new book names over the old text). */
 function exportItem(it) {
   const lang = exportLang();
-  if (!lang) return { label: itemLabel(it), paras: passageParas(it) };
+  const here = () => {
+    const paras = passageParas(it);
+    return { label: itemLabel(it), src: it.kind === "sermon" ? sermonLang(it) : state.bibleId,
+             paras: paras && paras.map(([n, t]) => [n, t, it.kind === "sermon" ? String(n) : `${it.c}:${n}`]) };
+  };
+  if (!lang) return here();
   if (it.kind === "sermon") {
     const own = paraCache[`${lang}/${it.code}`];
-    const paras = own && own.length ? own.filter(([n]) => n >= it.v1 && n <= (it.v2 || it.v1)) : passageParas(it);
-    return { label: `${it.code} ¶${range(it.v1, it.v2)}  ${sermonTitle(it.code, own && own.length ? lang : it.lang)}`, paras };
+    if (!own || !own.length) return here();  // not (yet) in that language
+    return { label: `${it.code} ¶${range(it.v1, it.v2)}  ${sermonTitle(it.code, lang)}`, src: lang,
+             paras: own.filter(([n]) => n >= it.v1 && n <= (it.v2 || it.v1)).map(([n, t]) => [n, t, String(n)]) };
   }
   const target = bibleFor(lang), to = target && bibleCache[target.id];
-  if (!to || !verseTables) return { label: `${bookName(it.b, lang)} ${it.c}:${range(it.v1, it.v2)}`, paras: passageParas(it) };
+  if (!to || !verseTables) return here();
   const refs = convertVerses(state.bible, to, it.b, it.c, it.v1, it.v2);
-  if (!refs.length) return { label: `${bookName(it.b, lang)} ${it.c}:${range(it.v1, it.v2)}`, paras: [] };
+  if (!refs.length) return { label: `${bookName(it.b, lang)} ${it.c}:${range(it.v1, it.v2)}`, src: target.id, paras: [] };
   const [c1, v1] = refs[0], [c2, v2] = refs[refs.length - 1];
   const label = `${bookName(it.b, lang)} ${c1}:${c1 === c2 ? range(v1, v2) : `${v1}-${c2}:${v2}`}`;
-  return { label, paras: refs.map(([c, v]) => [c1 === c2 ? v : `${c}:${v}`, to.books[it.b][c - 1][v - 1]]) };
+  return { label, src: target.id, paras: refs.map(([c, v]) => [c1 === c2 ? v : `${c}:${v}`, to.books[it.b][c - 1][v - 1], `${c}:${v}`]) };
 }
+/** The screen formatting of one verse / paragraph of an item, as segments; null when it has none for this text. */
+function fmtFor(it, src, key, text, always = false) {
+  if ((!always && !outlineFmt()) || !it.fmt || it.fmt.src !== src || !it.fmt.units || !it.fmt.units[key]) return null;
+  const segs = fmtSegments(it.fmt.units[key]);
+  return normWs(fmtPlain(segs)) === normWs(text) ? segs : null;
+}
+/** One verse / paragraph as a <p>: its number and the text, with its formatting. */
+function passageP(cls, it, src, n, t, key, always = false) {
+  const p = el("p", cls), segs = fmtFor(it, src, key, t, always);
+  p.append(el("span", "n", n), " ");
+  const body = el("span");
+  if (segs) body.innerHTML = fmtHtml(segs, false); else body.textContent = t;
+  p.append(body);
+  return p;
+}
+/** All notes: under a passage's heading its first words; tapped, the whole text (all verses / paragraphs,
+    with their formatting). Folded shut again with another tap. */
+function passageFold(it, sub) {
+  const d = el("details", "passage-full");
+  const sum = el("summary");
+  sum.append(el("span", "snip", sub || ""), el("span", "more"));
+  const box = el("div", "pf-text");
+  d.append(sum, box);
+  d.addEventListener("click", (e) => e.stopPropagation());  // not: put the cursor in the note below
+  const fill = () => {
+    const paras = passageParas(it);
+    box.innerHTML = "";
+    if (!paras) { box.textContent = "Loading…"; return false; }
+    const src = it.kind === "sermon" ? sermonLang(it) : state.bibleId;
+    for (const [n, t] of paras) box.append(passageP("", it, src, n, t, it.kind === "sermon" ? String(n) : `${it.c}:${n}`, true));
+    return true;
+  };
+  d.addEventListener("toggle", () => {
+    if (d.open && !fill() && it.kind === "sermon") loadSermonParas(it).then(fill);
+  });
+  return d;
+}
+/** What the export is waiting for: "" when ready; otherwise a line to show. */
+let exportWait = "";
 /** Loads what the export needs (the other Bible, the tables, sermon texts). */
 async function prepareExport(list) {
   const lang = exportLang(), jobs = [];
   for (const it of passages(list.items)) {
     if (it.kind === "sermon") jobs.push(loadSermonParas(it), lang ? loadSermonParas(it, lang) : null);
   }
-  if (lang && bibleFor(lang)) jobs.push(loadVerseTables(), loadBibleData(bibleFor(lang).id).catch(() => null));
+  const target = lang && bibleFor(lang);
+  exportWait = target && !bibleCache[target.id] ? `Loading the ${target.id} for ${EXPORT_LANGS[lang]}… until then the texts are as on this device.` : "";
+  if (target) {
+    jobs.push(loadVerseTables(), loadBibleData(target.id).catch(() => {
+      if (exportLang() === lang) exportWait = `The ${target.id} could not be loaded (no internet?): the texts stay as on this device.`;
+      return null;
+    }));
+  }
   await Promise.all(jobs);
+  if (exportLang() === lang && (!target || bibleCache[target.id])) exportWait = "";
 }
 /** A note as formatted text in the outline. */
 function noteBlock(html) {
@@ -2541,28 +2676,30 @@ function renderOutline(list) {
   const box = $("outline");
   if (!box) return;
   box.innerHTML = "";
+  const wait = $("o-wait");
+  if (wait) { wait.textContent = exportWait; wait.classList.toggle("hidden", !exportWait); }
   for (const it of list.items) {
-    if (isNote(it)) { box.append(noteBlock(it.text)); continue; }
+    if (isNote(it)) { if (withNotes()) box.append(noteBlock(it.text)); continue; }
     const sec = el("div", "o-item");
-    const { label, paras } = exportItem(it);
+    const { label, src, paras } = exportItem(it);
     sec.append(el("div", "o-ref", label));
-    if (!withTexts()) { /* the references and notes only */ }
-    else if (paras) for (const [n, t] of paras) { const p = el("p", "o-text"); p.append(el("span", "n", n), " " + t); sec.append(p); }
+    if (!withTexts()) { /* the references (and notes) only */ }
+    else if (paras) for (const [n, t, key] of paras) sec.append(passageP("o-text", it, src, n, t, key));
     else sec.append(el("p", "o-text", it.snippet || ""));
-    if (it.note) sec.append(noteBlock(it.note));
+    if (it.note && withNotes()) sec.append(noteBlock(it.note));
     box.append(sec);
   }
 }
 function outlineText(list) {
   const lines = [list.name || "Outline", ""];
   for (const it of list.items) {
-    if (isNote(it)) { lines.push(noteText(it.text), ""); continue; }
+    if (isNote(it)) { if (withNotes()) lines.push(noteText(it.text), ""); continue; }
     const { label, paras } = exportItem(it);
     lines.push(label);
-    if (!withTexts()) { /* the references and notes only */ }
+    if (!withTexts()) { /* the references (and notes) only */ }
     else if (paras) for (const [n, t] of paras) lines.push(`${n} ${t}`);
     else if (it.snippet) lines.push(it.snippet);
-    if (it.note) lines.push(noteText(it.note));
+    if (it.note && withNotes()) lines.push(noteText(it.note));
     lines.push("");
   }
   return lines.join("\n").trim();
@@ -2572,6 +2709,8 @@ function withTexts() {
   if (textsOverride !== null) return textsOverride;
   return store.get("outlineTexts", true);
 }
+const withNotes = () => textsOverride === false || store.get("outlineNotes", true);  // All notes' export: always the notes
+const outlineFmt = () => store.get("outlineFmt", true);
 
 // ---------------------------------------------------------------- the outline as a Word document (.docx)
 /* A .docx is a zip of a few XML files. Made here, without a library: titles and headings become
@@ -2635,13 +2774,19 @@ const paraXml = (p) => `<w:p><w:pPr><w:pStyle w:val="${p.style}"/></w:pPr>${p.ru
 function outlineDocx(list) {
   const paras = [{ style: "Title", runs: [{ text: list.name || "Outline" }] }];
   for (const it of list.items) {
-    if (isNote(it)) { paras.push(...noteParas(it.text)); continue; }
-    const { label, paras: texts } = exportItem(it);
+    if (isNote(it)) { if (withNotes()) paras.push(...noteParas(it.text)); continue; }
+    const { label, src, paras: texts } = exportItem(it);
     paras.push({ style: "Reference", runs: [{ text: label }] });
-    if (!withTexts()) { /* the references and notes only */ }
-    else if (texts) for (const [n, t] of texts) paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F", font: "Calibri" } }, { text: t }] });
-    else if (it.snippet) paras.push({ style: "Passage", runs: [{ text: it.snippet }] });
-    if (it.note) paras.push(...noteParas(it.note));
+    if (!withTexts()) { /* the references (and notes) only */ }
+    else if (texts) {
+      for (const [n, t, key] of texts) {
+        const segs = fmtFor(it, src, key, t);
+        const runs = segs ? segs.map(([text, b, i, u, c]) => ({ text, fmt: { b, i, u, color: c ? SCREEN_COLORS_LIGHT[c].slice(1) : undefined } }))
+                          : [{ text: t }];
+        paras.push({ style: "Passage", runs: [{ text: `${n} `, fmt: { b: true, color: "E3815F", font: "Calibri" } }, ...runs] });
+      }
+    } else if (it.snippet) paras.push({ style: "Passage", runs: [{ text: it.snippet }] });
+    if (it.note && withNotes()) paras.push(...noteParas(it.note));
   }
   const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
   const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document ${W}><w:body>${paras.map(paraXml).join("")}` +
@@ -3197,8 +3342,9 @@ function connectDialog(restore = false) {
        Bible Present → <b>iPad</b> must be switched on.</p>
     <input id="addr" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(saved)}">
     <p>The laptop shows this address (and a QR code you can also scan with the camera).</p>
-    ${list.items.length && !restore ? `<p><label><input type="checkbox" id="take" checked> Take “${esc(list.name || "this list")}” along
-      (${countText(list.items)})</label></p>` : ""}
+    ${list.items.length && !restore ? `<label class="check"><input type="checkbox" id="take" checked>
+      <span>Take “${esc(list.name || "this list")}” along<span class="sub">${countText(list.items)} · the laptop then asks whether to add it
+      to its service list or replace that</span></span></label>` : ""}
     <div class="buttons"><button id="c-cancel" class="ghost">Cancel</button>
       <button id="c-go" class="primary">Connect</button></div>`, (d) => {
     d.querySelector("#c-cancel").onclick = closeDialog;

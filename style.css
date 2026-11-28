@@ -4,6 +4,8 @@
   --blue: #109DE8; --coral: #E3815F; --navy: #324158;
   --sel: rgba(16, 157, 232, 0.16);
   --note-bg: #FFF4D6; --note-text: #6B4E00;
+  /* the screen colours of formatted verses, in shades that read well here (see SCREEN_COLORS in app.js) */
+  --s-yellow: #A07800; --s-orange: #C25E00; --s-red: #D70015; --s-green: #1E7B34; --s-blue: #0067A3; --s-purple: #8944AB;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -11,9 +13,12 @@
     --bg: #121925; --surface: #1C2533; --field: #161E2B; --hover: #283447; --border: #324158;
     --text: #EEF1F5; --muted: #98A3B3; --title: #FFFFFF; --sel: rgba(16, 157, 232, 0.28);
     --note-bg: rgba(245, 200, 90, 0.14); --note-text: #F5D58A;
+    --s-yellow: #FFD60A; --s-orange: #FF9F0A; --s-red: #FF453A; --s-green: #30D158; --s-blue: #64D2FF; --s-purple: #BF5AF2;
     color-scheme: dark;
   }
 }
+.s-yellow { color: var(--s-yellow); } .s-orange { color: var(--s-orange); } .s-red { color: var(--s-red); }
+.s-green { color: var(--s-green); } .s-blue { color: var(--s-blue); } .s-purple { color: var(--s-purple); }
 
 * { box-sizing: border-box; }
 /* No zoom on a quick double tap (e.g. tapping Next fast); scrolling and pinch-to-zoom still work.
@@ -240,6 +245,10 @@ mark { background: transparent; color: var(--coral); font-weight: 700; }
                                                      border-radius: 0 0 8px 8px; padding-top: 10px; }
 .all-ref .ref { font-weight: 800; color: var(--coral); white-space: nowrap; }
 .all-ref .sub { color: var(--muted); font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.all-ref:has(.passage-full) { flex-wrap: wrap; }
+.all-ref .passage-full { flex: 1; min-width: 0; margin: 0; }
+.all-ref .passage-full[open] { flex-basis: 100%; }  /* opened: the whole width, under the reference */
+.all-ref .passage-full summary { font-size: 13px; }
 .marker-colors { display: flex; gap: 6px; flex-basis: 100%; align-items: center; padding: 2px 0; }
 .marker-colors .swatch { width: 34px; min-height: 34px; padding: 0; border-radius: 50%; }
 .swatch.m-yellow { background: rgba(255, 204, 0, .8); } .swatch.m-green { background: rgba(52, 199, 89, .75); }
@@ -410,6 +419,25 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 .o-texts, .o-lang { display: flex; gap: 8px; align-items: center; justify-content: flex-start; font-size: 14px; color: var(--muted); }
 .dialog .o-lang select { width: auto; min-height: 32px; padding: 2px 8px; }
 .dialog .o-texts input { width: 20px; height: 20px; min-height: 0; flex: none; margin: 0; padding: 0; }
+.o-loading { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+/* a tick box with its text, in a soft box (e.g. "Take … along" when connecting) */
+.dialog label.check { display: flex; gap: 12px; align-items: center; padding: 12px 14px; margin: 0 0 12px;
+                      background: var(--field); border: 1px solid var(--border); border-radius: 10px; color: var(--text); cursor: pointer; }
+.dialog label.check input { width: 22px; height: 22px; min-height: 0; flex: none; margin: 0; accent-color: var(--blue); }
+.dialog label.check .sub { display: block; font-size: 13px; color: var(--muted); }
+/* All notes: the full text of a passage under its heading, folded open or shut */
+.passage-full { margin: 4px 0 0; }
+.passage-full summary { cursor: pointer; color: var(--muted); font-size: 14px; list-style: none; display: flex; gap: 8px; }
+.passage-full summary::-webkit-details-marker { display: none; }
+.passage-full summary .snip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.passage-full summary .more { flex: none; color: var(--blue); font-weight: 600; }
+.passage-full summary .more::before { content: "▾ whole text"; }
+.passage-full[open] summary .more::before { content: "▴ fold shut"; }
+.passage-full[open] summary .snip { visibility: hidden; }
+.passage-full .pf-text { margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--border);
+                         font-family: ui-serif, Georgia, "Times New Roman", serif; font-size: 15px; color: var(--text); white-space: pre-line; }
+.passage-full .pf-text .n { color: var(--coral); font-weight: 700; font-family: system-ui, sans-serif; font-size: 12px; margin-right: 4px; }
+.passage-full .pf-text p { margin: 2px 0; }
 .backup-row { text-align: left; }
 .file-link { display: block; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--field);
              color: var(--blue); font-weight: 700; text-decoration: none; word-break: break-word; }
@@ -429,7 +457,8 @@ button.live { background: var(--coral); border-color: var(--coral); color: #fff;
 @media print {
   @page { margin: 15mm; }
   html, body.outline-open { height: auto; overflow: visible; display: block; background: #fff; color: #000; }
-  body.outline-open { --surface: #fff; --text: #1F2B3B; --muted: #7C8796; --title: #324158; --coral: #E3815F;
+  body.outline-open { --s-yellow: #A07800; --s-orange: #C25E00; --s-red: #D70015; --s-green: #1E7B34; --s-blue: #0067A3; --s-purple: #8944AB;
+                      --surface: #fff; --text: #1F2B3B; --muted: #7C8796; --title: #324158; --coral: #E3815F;
                       --note-bg: #FFF4D6; --note-text: #6B4E00; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   body.outline-open > *:not(#overlay) { display: none !important; }
   body.outline-open #overlay { position: static; background: none; padding: 0; display: block; inset: auto; }
